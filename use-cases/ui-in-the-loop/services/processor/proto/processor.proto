@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package ui_in_the_loop;
+
+// Computes simple demand metrics from a user-chosen scenario.
+service Processor {
+  rpc Process(ProcessRequest) returns (ProcessResponse);
+}
+
+message ProcessRequest {
+  string scenario = 1;   // user-chosen scenario label
+  double factor = 2;     // demand scaling factor chosen in the UI
+}
+
+message ProcessResponse {
+  string scenario = 1;
+  double factor = 2;
+  double peak = 3;
+  double average = 4;
+  double total = 5;
+}
