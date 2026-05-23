@@ -1,12 +1,22 @@
 """FastAPI REST API for orchestration platform."""
 
+import base64
+import json
 import os
 import uuid
+from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Security
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from redis import Redis
+
+# Registry of all workflow ids the orchestrator has seen, for the dashboard's
+# "list workflows" view (the core API never needed to enumerate them).
+_WORKFLOWS_KEY = "workflows"
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -105,6 +115,12 @@ class OrchestratorAPI:
             }
             if endpoints_data:
                 self._redis.hset(endpoints_key, mapping=endpoints_data)
+
+            # Persist the raw blueprint so the dashboard can reconstruct the
+            # graph later (the engine only keeps a node->task mapping), and
+            # register the workflow id for the "list workflows" view.
+            self._redis.set(f"blueprint:{workflow_id}", json.dumps(request.blueprint))
+            self._redis.sadd(_WORKFLOWS_KEY, workflow_id)
 
             # Parse initial inputs for start nodes
             initial_inputs: list[DataReference] | None = None
@@ -249,6 +265,10 @@ class OrchestratorAPI:
             # Delete endpoints
             self._redis.delete(f"endpoints:{workflow_id}")
 
+            # Delete persisted blueprint and deregister
+            self._redis.delete(f"blueprint:{workflow_id}")
+            self._redis.srem(_WORKFLOWS_KEY, workflow_id)
+
             # Clear queue
             self._engine._task_queue.clear_queue(workflow_id)
 
@@ -258,5 +278,183 @@ class OrchestratorAPI:
         def health_check() -> HealthResponse:
             """Health check endpoint."""
             return HealthResponse(status="ok")
+
+        # ----- Dashboard endpoints (consumed by the bundled /ui) -----------
+
+        @app.get("/workflows", dependencies=[Depends(_verify_orchestrator_key)])
+        def list_workflows() -> dict:
+            """List all known workflows with their status (newest first)."""
+            ids = self._redis.smembers(_WORKFLOWS_KEY) or set()
+            items = []
+            for wid in ids:
+                wid = wid.decode() if isinstance(wid, bytes) else wid
+                try:
+                    state = self._engine.get_workflow_status(wid)
+                except WorkflowNotFoundError:
+                    self._redis.srem(_WORKFLOWS_KEY, wid)
+                    continue
+                name = None
+                raw = self._redis.get(f"blueprint:{wid}")
+                if raw:
+                    try:
+                        name = json.loads(raw).get("name")
+                    except (ValueError, TypeError):
+                        name = None
+                items.append({
+                    "workflow_id": wid,
+                    "name": name,
+                    "status": state.status.value,
+                    "created_at": state.created_at.isoformat(),
+                    "updated_at": state.updated_at.isoformat(),
+                    "error": state.error,
+                })
+            items.sort(key=lambda i: i["created_at"], reverse=True)
+            return {"workflows": items, "total": len(items)}
+
+        @app.get(
+            "/workflows/{workflow_id}/graph",
+            responses={404: {"model": ErrorResponse}},
+            dependencies=[Depends(_verify_orchestrator_key)],
+        )
+        def get_workflow_graph(workflow_id: str) -> dict:
+            """Reconstruct the workflow graph (nodes + edges) with live status."""
+            try:
+                state = self._engine.get_workflow_status(workflow_id)
+            except WorkflowNotFoundError:
+                raise HTTPException(status_code=404, detail="Workflow not found")
+
+            raw = self._redis.get(f"blueprint:{workflow_id}")
+            if not raw:
+                raise HTTPException(status_code=404, detail="Blueprint not available")
+            blueprint = json.loads(raw)
+
+            # Map node_key -> status from the workflow's tasks.
+            status_by_key: dict[str, str] = {}
+            try:
+                for task in self._engine.get_all_tasks(workflow_id):
+                    status_by_key[task.node_key] = task.status.value
+            except WorkflowNotFoundError:
+                pass
+
+            nodes, edges = [], []
+            for node in blueprint.get("nodes", []):
+                container = node.get("container_name")
+                node_type = node.get("node_type", "MLModel")
+                op_list = node.get("operation_signature_list", []) or []
+                if not op_list:
+                    key = container
+                    nodes.append({
+                        "key": key, "container_name": container,
+                        "operation": None, "node_type": node_type,
+                        "status": status_by_key.get(key, "pending"),
+                    })
+                    continue
+                for op in op_list:
+                    op_name = (op.get("operation_signature") or {}).get("operation_name")
+                    key = f"{container}:{op_name}"
+                    nodes.append({
+                        "key": key, "container_name": container,
+                        "operation": op_name, "node_type": node_type,
+                        "status": status_by_key.get(key, "pending"),
+                    })
+                    for conn in op.get("connected_to", []) or []:
+                        to_op = (conn.get("operation_signature") or {}).get("operation_name")
+                        edges.append({"from": key, "to": f"{conn.get('container_name')}:{to_op}"})
+
+            return {
+                "workflow_id": workflow_id,
+                "name": blueprint.get("name"),
+                "status": state.status.value,
+                "nodes": nodes,
+                "edges": edges,
+            }
+
+        @app.get(
+            "/workflows/{workflow_id}/logs",
+            response_class=PlainTextResponse,
+            dependencies=[Depends(_verify_orchestrator_key)],
+        )
+        def get_workflow_logs(workflow_id: str, lines: int = 200) -> str:
+            """Return recent log lines mentioning this workflow.
+
+            Merges the API and worker log files (they share a logs volume), so
+            task-execution detail from the workers is included. Falls back to
+            the unfiltered tail if nothing mentions the id.
+            """
+            log_dir = None
+            for candidate in (os.environ.get("LOG_DIR"), "logs", "/app/src/logs"):
+                if candidate and Path(candidate).is_dir():
+                    log_dir = Path(candidate)
+                    break
+            if log_dir is None:
+                return "(orchestrator log directory not found)"
+
+            collected: list[str] = []
+            for f in sorted(log_dir.glob("*.log")):
+                try:
+                    collected.extend(f.read_text(errors="replace").splitlines())
+                except OSError:
+                    continue
+            # Lines are prefixed with an ISO-ish timestamp, so a lexicographic
+            # sort orders them chronologically across files.
+            collected.sort()
+
+            matching = [ln for ln in collected if workflow_id in ln]
+            chosen = matching[-lines:] if matching else collected[-lines:]
+            header = "" if matching else "(no lines mention this workflow; showing recent log)\n"
+            return header + "\n".join(chosen)
+
+        @app.get(
+            "/workflows/{workflow_id}/tasks/{task_id}/output-data",
+            dependencies=[Depends(_verify_orchestrator_key)],
+        )
+        def get_task_output_data(workflow_id: str, task_id: str):
+            """Resolve and return a task's output data (local convenience).
+
+            inline -> decoded; http/https -> fetched by the orchestrator (which
+            can reach services even when the browser cannot); other protocols
+            are described but not fetched.
+            """
+            try:
+                task = self._engine._state_store.get_task(workflow_id, task_id)
+            except (WorkflowNotFoundError, TaskNotFoundError):
+                raise HTTPException(status_code=404, detail="Task not found")
+
+            if not task.output_refs:
+                raise HTTPException(status_code=404, detail="Task has no output")
+
+            ref = task.output_refs[0]
+            protocol = ref.protocol.value if hasattr(ref.protocol, "value") else str(ref.protocol)
+            fmt = ref.format if isinstance(ref.format, str) else getattr(ref.format, "value", "binary")
+            media = {"json": "application/json", "csv": "text/csv", "text": "text/plain"}.get(fmt, "text/plain")
+
+            if protocol == "inline":
+                try:
+                    data = base64.b64decode(ref.uri)
+                except Exception:
+                    data = ref.uri.encode()
+                return Response(content=data, media_type=media)
+
+            if protocol in ("http", "https"):
+                headers = {}
+                services_key = self._redis.get(f"services_key:{workflow_id}")
+                if services_key:
+                    services_key = services_key.decode() if isinstance(services_key, bytes) else services_key
+                    headers["Authorization"] = f"Bearer {services_key}"
+                try:
+                    with httpx.Client(timeout=30.0) as client:
+                        r = client.get(ref.uri, headers=headers)
+                        r.raise_for_status()
+                        return Response(content=r.content, media_type=media)
+                except httpx.HTTPError as e:
+                    raise HTTPException(status_code=502, detail=f"Could not fetch data: {e}")
+
+            return {"protocol": protocol, "uri": ref.uri, "format": fmt,
+                    "note": "Data is not inline or HTTP; open it with the appropriate client."}
+
+        # ----- Serve the bundled dashboard UI ------------------------------
+        ui_dir = Path(__file__).resolve().parent.parent / "ui"
+        if ui_dir.exists():
+            app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
 
         return app

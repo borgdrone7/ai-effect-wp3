@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI-EFFECT Orchestrator</title>
+<style>
+  :root { --bg:#0f1020; --panel:#1a1b33; --line:#2c2d4a; --txt:#e8e8f2; --muted:#9a9ab5;
+          --pending:#6b6b85; --running:#3a78ff; --completed:#27ae60; --failed:#e74c3c; --queued:#c79a2e; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:12px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:1rem; margin:0; font-weight:700; letter-spacing:.3px; }
+  header .sp { flex:1; }
+  header input { background:var(--panel); border:1px solid var(--line); color:var(--txt); padding:6px 8px; border-radius:6px; font-size:.8rem; width:230px; }
+  .layout { display:grid; grid-template-columns:280px 1fr; height:calc(100vh - 49px); }
+  .sidebar { border-right:1px solid var(--line); overflow:auto; }
+  .wf { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .wf:hover { background:var(--panel); }
+  .wf.sel { background:var(--panel); border-left:3px solid var(--running); }
+  .wf .name { font-weight:600; font-size:.9rem; }
+  .wf .meta { font-size:.72rem; color:var(--muted); margin-top:3px; font-family:monospace; }
+  .badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:.68rem; font-weight:700; color:#fff; }
+  .main { overflow:auto; padding:16px; }
+  .empty { color:var(--muted); padding:40px; text-align:center; }
+  section { margin-bottom:22px; }
+  section h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:0 0 8px; }
+  svg { width:100%; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+  .node rect { stroke-width:2; rx:8; }
+  .node text { fill:#fff; font-size:12px; font-weight:600; }
+  .node .op { fill:#e8e8f2; font-size:10px; font-weight:400; opacity:.85; }
+  .edge { stroke:var(--muted); stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+  table { width:100%; border-collapse:collapse; font-size:.82rem; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  td.k { font-family:monospace; }
+  .task-row { cursor:pointer; }
+  .task-row:hover { background:var(--panel); }
+  pre { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; overflow:auto; font-size:.78rem; max-height:320px; }
+  .row { display:flex; gap:16px; }
+  .row > div { flex:1; min-width:0; }
+  button.refresh { background:var(--panel); border:1px solid var(--line); color:var(--txt); padding:5px 10px; border-radius:6px; cursor:pointer; font-size:.78rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI-EFFECT Orchestrator</h1>
+  <span class="badge" id="hp" style="background:var(--muted)">checking…</span>
+  <span class="sp"></span>
+  <input id="apikey" placeholder="API key (optional)" />
+  <button class="refresh" id="reload">Refresh</button>
+</header>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="main" id="main"><div class="empty">Select a workflow on the left.</div></div>
+</div>
+
+<script>
+const COLORS = { pending:'#6b6b85', queued:'#c79a2e', running:'#3a78ff', completed:'#27ae60', failed:'#e74c3c' };
+const color = s => COLORS[s] || '#6b6b85';
+let selected = null;
+let timer = null;
+
+function key() { return document.getElementById('apikey').value.trim(); }
+function headers() { const k = key(); return k ? { 'Authorization': 'Bearer ' + k } : {}; }
+async function api(path) {
+  const r = await fetch(path, { headers: headers() });
+  if (!r.ok) throw new Error(path + ' -> ' + r.status);
+  return r;
+}
+const esc = s => (s==null?'':String(s)).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function health() {
+  const el = document.getElementById('hp');
+  try { await fetch('/health'); el.textContent='online'; el.style.background='var(--completed)'; }
+  catch { el.textContent='offline'; el.style.background='var(--failed)'; }
+}
+
+async function loadWorkflows() {
+  const sb = document.getElementById('sidebar');
+  try {
+    const data = await (await api('/workflows')).json();
+    if (!data.workflows.length) { sb.innerHTML = '<div class="empty">No workflows yet.</div>'; return; }
+    sb.innerHTML = data.workflows.map(w => `
+      <div class="wf ${w.workflow_id===selected?'sel':''}" data-id="${w.workflow_id}">
+        <div class="name">${esc(w.name || w.workflow_id)}</div>
+        <div class="meta">${w.workflow_id}</div>
+        <div class="meta"><span class="badge" style="background:${color(w.status)}">${w.status}</span>
+          &nbsp;${new Date(w.created_at).toLocaleString()}</div>
+      </div>`).join('');
+    sb.querySelectorAll('.wf').forEach(el => el.onclick = () => select(el.dataset.id));
+  } catch (e) { sb.innerHTML = '<div class="empty">'+esc(e.message)+'</div>'; }
+}
+
+function layout(nodes, edges) {
+  const byKey = {}; nodes.forEach(n => byKey[n.key] = n);
+  const indeg = {}; nodes.forEach(n => indeg[n.key]=0);
+  edges.forEach(e => { if (e.to in indeg) indeg[e.to]++; });
+  const level = {}; const q = nodes.filter(n => indeg[n.key]===0).map(n=>n.key);
+  q.forEach(k => level[k]=0);
+  const adj = {}; edges.forEach(e => { (adj[e.from]=adj[e.from]||[]).push(e.to); });
+  const seen = new Set(q);
+  while (q.length) {
+    const k = q.shift();
+    (adj[k]||[]).forEach(t => {
+      level[t] = Math.max(level[t]||0, (level[k]||0)+1);
+      if (!seen.has(t)) { seen.add(t); q.push(t); }
+    });
+  }
+  nodes.forEach(n => { if (level[n.key]==null) level[n.key]=0; });
+  const cols = {}; nodes.forEach(n => { (cols[level[n.key]]=cols[level[n.key]]||[]).push(n); });
+  const COLW=210, ROWH=78, NW=170, NH=50;
+  Object.entries(cols).forEach(([lv, arr]) => arr.forEach((n,i) => {
+    n.x = 30 + (+lv)*COLW; n.y = 24 + i*ROWH; n.w=NW; n.h=NH;
+  }));
+  const maxLv = Math.max(0, ...Object.keys(cols).map(Number));
+  const maxRows = Math.max(1, ...Object.values(cols).map(a=>a.length));
+  return { width: 60 + (maxLv+1)*COLW, height: 48 + maxRows*ROWH, byKey };
+}
+
+function renderGraph(g) {
+  const { nodes, edges } = g;
+  if (!nodes.length) return '<div class="empty">No nodes.</div>';
+  const dim = layout(nodes, edges);
+  const edgePaths = edges.map(e => {
+    const a = dim.byKey[e.from], b = dim.byKey[e.to];
+    if (!a || !b) return '';
+    const x1=a.x+a.w, y1=a.y+a.h/2, x2=b.x, y2=b.y+b.h/2, mx=(x1+x2)/2;
+    return `<path class="edge" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+  }).join('');
+  const nodeEls = nodes.map(n => `
+    <g class="node">
+      <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8"
+            fill="${color(n.status)}" stroke="#fff" opacity="0.92"/>
+      <text x="${n.x+12}" y="${n.y+22}">${esc(n.container_name)}</text>
+      <text class="op" x="${n.x+12}" y="${n.y+38}">${esc(n.operation||'')} · ${esc(n.status)}</text>
+    </g>`).join('');
+  return `<svg viewBox="0 0 ${dim.width} ${dim.height}" preserveAspectRatio="xMinYMin meet">
+    <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#9a9ab5"/></marker></defs>
+    ${edgePaths}${nodeEls}</svg>`;
+}
+
+async function select(id) {
+  selected = id;
+  document.querySelectorAll('.wf').forEach(el => el.classList.toggle('sel', el.dataset.id===id));
+  await refreshDetail();
+}
+
+async function refreshDetail() {
+  if (!selected) return;
+  const main = document.getElementById('main');
+  try {
+    const [graph, tasks, logs] = await Promise.all([
+      (await api(`/workflows/${selected}/graph`)).json(),
+      (await api(`/workflows/${selected}/tasks`)).json(),
+      (await api(`/workflows/${selected}/logs?lines=120`)).text(),
+    ]);
+    const taskRows = tasks.tasks.map(t => `
+      <tr class="task-row" data-task="${t.task_id}">
+        <td class="k">${esc(t.node_key)}</td>
+        <td><span class="badge" style="background:${color(t.status)}">${t.status}</span></td>
+        <td>${t.output_refs.length ? 'view' : ''}</td>
+        <td>${esc(t.error||'')}</td>
+      </tr>`).join('');
+    main.innerHTML = `
+      <section><h2>Graph — ${esc(graph.name||selected)}
+        <span class="badge" style="background:${color(graph.status)}">${graph.status}</span></h2>
+        ${renderGraph(graph)}</section>
+      <div class="row">
+        <div><section><h2>Tasks</h2>
+          <table><thead><tr><th>node</th><th>status</th><th>data</th><th>error</th></tr></thead>
+          <tbody>${taskRows}</tbody></table></section></div>
+      </div>
+      <section><h2>Output data</h2><pre id="data">Click a task with "view" to load its output.</pre></section>
+      <section><h2>Logs</h2><pre>${esc(logs)}</pre></section>`;
+    main.querySelectorAll('.task-row').forEach(row => row.onclick = async () => {
+      const tid = row.dataset.task;
+      const pre = document.getElementById('data');
+      pre.textContent = 'loading…';
+      try {
+        const r = await api(`/workflows/${selected}/tasks/${tid}/output-data`);
+        const ct = r.headers.get('content-type')||'';
+        const body = await r.text();
+        pre.textContent = ct.includes('json') ? JSON.stringify(JSON.parse(body), null, 2) : body;
+      } catch (e) { pre.textContent = e.message; }
+    });
+  } catch (e) { main.innerHTML = '<div class="empty">'+esc(e.message)+'</div>'; }
+}
+
+function tick() { health(); loadWorkflows(); refreshDetail(); }
+document.getElementById('reload').onclick = tick;
+document.getElementById('apikey').value = localStorage.getItem('orch_key')||'';
+document.getElementById('apikey').onchange = e => localStorage.setItem('orch_key', e.target.value.trim());
+tick();
+timer = setInterval(tick, 2500);
+</script>
+</body>
+</html>
