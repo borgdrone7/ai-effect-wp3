@@ -129,10 +129,12 @@ class WorkerDaemon:
 
 
 def main() -> int:
-    # Configure logging with file rotation
+    # Configure logging with file rotation. Use a per-container filename so
+    # multiple worker replicas sharing the logs volume do not write to the
+    # same file; the dashboard's logs endpoint merges them.
     configure_logging(
         log_dir="logs",
-        log_file="worker_daemon.log",
+        log_file=f"worker-{os.environ.get('HOSTNAME', 'worker')}.log",
         level=logging.INFO,
     )
 
