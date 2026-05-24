@@ -127,6 +127,60 @@ def _probe(ip: str, port: int) -> str:
         return "down"
 
 
+@app.post("/api/solutions/{sid}/start-services")
+def start_services(sid: str):
+    """Pull each service's image and run it on the ai-effect-services network.
+
+    Phase 2: needs the Docker socket mounted into the launcher. Each service is
+    run as a container named after its dockerinfo ip_address (so the orchestrator
+    reaches it by that name), on the shared network, with a shared per-solution
+    volume at /app/data (file-based pipelines exchange data through it; harmless
+    otherwise).
+    """
+    sol = SOLUTIONS.get(sid)
+    if not sol:
+        raise HTTPException(404, "Solution not found (re-upload it)")
+
+    try:
+        import docker
+        client = docker.from_env()
+        client.ping()
+    except Exception as e:
+        raise HTTPException(
+            503,
+            "Docker is not available to the launcher. Starting services needs the "
+            f"Docker socket mounted (see docker-compose.yml). Details: {e}",
+        )
+
+    images = {n.get("container_name"): n.get("image") for n in sol["blueprint"].get("nodes", [])}
+    vol = f"aieffect_{sid}_data"
+    results = []
+    for d in sol["dockerinfo"].get("docker_info_list", []):
+        cn, ip, port = d.get("container_name"), d.get("ip_address"), str(d.get("port"))
+        image = images.get(cn)
+        if not image:
+            results.append({"container_name": cn, "name": ip, "state": "no image in blueprint"})
+            continue
+        try:
+            client.images.pull(image)
+            try:
+                existing = client.containers.get(ip)
+                existing.remove(force=True)
+            except docker.errors.NotFound:
+                pass
+            client.containers.run(
+                image, name=ip, detach=True, network="ai-effect-services",
+                environment={"PORT": port},
+                volumes={vol: {"bind": "/app/data", "mode": "rw"}},
+                restart_policy={"Name": "unless-stopped"},
+            )
+            results.append({"container_name": cn, "name": ip, "image": image, "state": "started"})
+        except Exception as e:
+            results.append({"container_name": cn, "name": ip, "image": image,
+                            "state": "error", "error": str(e)})
+    return {"services": results}
+
+
 @app.get("/api/solutions/{sid}/readiness")
 def readiness(sid: str):
     """Probe each service's address and report up/down."""

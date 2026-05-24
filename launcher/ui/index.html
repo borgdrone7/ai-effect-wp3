@@ -56,6 +56,11 @@
     <h2>2 · Services &amp; readiness</h2>
     <div id="solname" style="font-weight:600; margin-bottom:8px;"></div>
     <div id="graph"></div>
+    <div style="margin:10px 0;">
+      <button class="sec" id="startSvcBtn">Start services (pull &amp; run images)</button>
+      <span id="startSvcMsg" class="muted"></span>
+      <div class="muted" style="font-size:.78rem; margin-top:4px;">Only needed if the services are not already running. Pulls each service's image and runs it locally.</div>
+    </div>
     <table id="svcTable"><thead><tr><th>service</th><th>address</th><th>state</th></tr></thead><tbody></tbody></table>
     <p class="muted" id="readyMsg" style="margin-bottom:0"></p>
   </div>
@@ -152,6 +157,18 @@ function startReadiness() {
   };
   poll(); readyTimer = setInterval(poll, 2500);
 }
+
+document.getElementById('startSvcBtn').onclick = async () => {
+  const msg = document.getElementById('startSvcMsg');
+  msg.textContent = 'pulling images and starting… (first pull can take a minute)';
+  try {
+    const r = await j(`/api/solutions/${sid}/start-services`, { method:'POST' });
+    const errs = r.services.filter(s => s.state === 'error');
+    msg.innerHTML = errs.length
+      ? 'Some failed: ' + errs.map(e => esc(e.name + ': ' + (e.error||''))).join('; ')
+      : '<span class="ok">Started ' + r.services.map(s => esc(s.name)).join(', ') + '</span> — watch readiness below.';
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
+};
 
 function b64(str){ return btoa(unescape(encodeURIComponent(str))); }
 
