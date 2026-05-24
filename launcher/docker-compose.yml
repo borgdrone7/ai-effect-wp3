@@ -1,0 +1,27 @@
+services:
+  launcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "18500:8000"
+    environment:
+      # The orchestrator API is reached on the host (it is not on the
+      # ai-effect-services network). Override if yours differs.
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://host.docker.internal:18000}
+      - ORCHESTRATOR_API_KEY=${ORCHESTRATOR_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Phase 2 "Start services" pulls images and runs containers via the host
+      # Docker daemon. This grants the launcher control of the host's Docker;
+      # acceptable for a local tool. Remove it to run Phase 1 (submit-only).
+      - /var/run/docker.sock:/var/run/docker.sock
+
+# Join the shared services network so the launcher can reach pipeline services
+# by their docker names (for readiness checks), exactly like the orchestrator
+# workers do.
+networks:
+  default:
+    name: ai-effect-services
+    external: true

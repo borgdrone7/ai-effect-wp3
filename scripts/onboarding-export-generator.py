@@ -70,6 +70,9 @@ class OnboardingExportGenerator:
                 'container_name': f"{dir_name}1",
                 'proto_file': proto_files[0],
                 'service_dir': service_dir,
+                # Optional registry image; when set, the blueprint references it
+                # so the solution can be pulled and run without a local build.
+                'image': mapping.get('image'),
             }
             services.append(service_info)
             print(f"Found service: {dir_name} -> {mapping['ip_address']}:{mapping['port']}")
@@ -209,7 +212,7 @@ class OnboardingExportGenerator:
 
         node = {
             "proto_uri": f"microservice/{service['container_name']}.proto",
-            "image": f"{self.use_case_dir.name}-{service['name']}:latest",
+            "image": service.get('image') or f"{self.use_case_dir.name}-{service['name']}:latest",
             "node_type": node_type,
             "container_name": service['container_name'],
             "operation_signature_list": operation_signatures
