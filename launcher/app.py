@@ -190,14 +190,19 @@ def readiness(sid: str):
     results = []
     for d in sol["dockerinfo"].get("docker_info_list", []):
         ip = d.get("ip_address")
+        # Web UI link, if the service declared one: webui_url verbatim, else
+        # built from the address and webui_port.
+        webui = d.get("webui_url")
+        if not webui and d.get("webui_port"):
+            webui = f"http://{ip}:{d.get('webui_port')}"
         try:
             port = int(d.get("port"))
         except (TypeError, ValueError):
             results.append({"container_name": d.get("container_name"),
-                            "address": f"{ip}:{d.get('port')}", "state": "down"})
+                            "address": f"{ip}:{d.get('port')}", "state": "down", "webui": webui})
             continue
         results.append({"container_name": d.get("container_name"),
-                        "address": f"{ip}:{port}", "state": _probe(ip, port)})
+                        "address": f"{ip}:{port}", "state": _probe(ip, port), "webui": webui})
     all_ready = bool(results) and all(r["state"] != "down" for r in results)
     return {"services": results, "all_ready": all_ready}
 

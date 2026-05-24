@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package ui_in_the_loop;
+
+// Turns demand metrics into a human-readable summary and recommendation.
+service Summarizer {
+  rpc Summarize(SummarizeRequest) returns (SummarizeResponse);
+}
+
+message SummarizeRequest {
+  string scenario = 1;
+  double peak = 2;
+  double average = 3;
+  double total = 4;
+}
+
+message SummarizeResponse {
+  string summary = 1;
+  string recommendation = 2;
+}

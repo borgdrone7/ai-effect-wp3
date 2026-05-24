@@ -61,7 +61,7 @@
       <span id="startSvcMsg" class="muted"></span>
       <div class="muted" style="font-size:.78rem; margin-top:4px;">Only needed if the services are not already running. Pulls each service's image and runs it locally.</div>
     </div>
-    <table id="svcTable"><thead><tr><th>service</th><th>address</th><th>state</th></tr></thead><tbody></tbody></table>
+    <table id="svcTable"><thead><tr><th>service</th><th>address</th><th>state</th><th>web ui</th></tr></thead><tbody></tbody></table>
     <p class="muted" id="readyMsg" style="margin-bottom:0"></p>
   </div>
 
@@ -149,7 +149,8 @@ function startReadiness() {
       const r = await j(`/api/solutions/${sid}/readiness`);
       document.querySelector('#svcTable tbody').innerHTML = r.services.map(s =>
         `<tr><td class="k">${esc(s.container_name)}</td><td class="k">${esc(s.address)}</td>
-         <td><span class="badge" style="background:${color(s.state)}">${s.state}</span></td></tr>`).join('');
+         <td><span class="badge" style="background:${color(s.state)}">${s.state}</span></td>
+         <td>${s.webui ? '<a href="'+esc(s.webui)+'" target="_blank" rel="noopener">open &#8599;</a>' : ''}</td></tr>`).join('');
       const rm = document.getElementById('readyMsg');
       rm.innerHTML = r.all_ready ? '<span class="ok">All services reachable — ready to start.</span>'
         : 'Waiting for all services to be reachable (down = not running or not on the ai-effect-services network).';

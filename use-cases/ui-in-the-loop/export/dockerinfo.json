@@ -1,0 +1,15 @@
+{
+    "docker_info_list": [
+        {
+            "container_name": "processor1",
+            "ip_address": "processor",
+            "port": "8080",
+            "webui_url": "http://localhost:18090"
+        },
+        {
+            "container_name": "summarizer1",
+            "ip_address": "summarizer",
+            "port": "8080"
+        }
+    ]
+}

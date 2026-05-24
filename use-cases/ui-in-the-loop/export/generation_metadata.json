@@ -1,0 +1,17 @@
+{
+    "use_case_name": "ui-in-the-loop",
+    "use_case_directory": "ui-in-the-loop",
+    "source_path": "../../use-cases/ui-in-the-loop",
+    "services": [
+        {
+            "service_name": "processor",
+            "container_name": "processor1",
+            "image_name": "ui-in-the-loop-processor:latest"
+        },
+        {
+            "service_name": "summarizer",
+            "container_name": "summarizer1",
+            "image_name": "ui-in-the-loop-summarizer:latest"
+        }
+    ]
+}
