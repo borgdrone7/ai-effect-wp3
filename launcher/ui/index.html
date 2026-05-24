@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI-EFFECT Launcher</title>
+<style>
+  :root { --bg:#0f1020; --panel:#1a1b33; --line:#2c2d4a; --txt:#e8e8f2; --muted:#9a9ab5;
+          --pending:#6b6b85; --running:#3a78ff; --completed:#27ae60; --failed:#e74c3c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:14px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:1.05rem; margin:0; font-weight:700; }
+  header .sp { flex:1; }
+  .muted { color:var(--muted); }
+  main { max-width:960px; margin:0 auto; padding:24px 22px; }
+  .step { border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:18px; background:var(--panel); }
+  .step h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:0 0 12px; }
+  .step.disabled { opacity:.45; pointer-events:none; }
+  button { background:var(--running); border:0; color:#fff; padding:10px 18px; border-radius:7px; font-size:.92rem; font-weight:600; cursor:pointer; }
+  button.sec { background:var(--panel); border:1px solid var(--line); color:var(--txt); }
+  button:disabled { opacity:.5; cursor:default; }
+  input[type=file] { color:var(--muted); }
+  textarea { width:100%; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:8px; font-family:monospace; font-size:.82rem; min-height:60px; }
+  table { width:100%; border-collapse:collapse; font-size:.85rem; margin-top:6px; }
+  th,td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  td.k { font-family:monospace; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:11px; font-size:.7rem; font-weight:700; color:#fff; }
+  svg { width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; margin-top:6px; }
+  .node text { fill:#fff; font-size:12px; font-weight:600; }
+  .node .op { fill:#e8e8f2; font-size:10px; opacity:.85; }
+  .edge { stroke:var(--muted); stroke-width:1.6; fill:none; marker-end:url(#arrow); }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px; overflow:auto; font-size:.78rem; max-height:300px; }
+  a { color:#7aa2ff; }
+  .ok { color:var(--completed); font-weight:700; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI-EFFECT Launcher</h1>
+  <span class="sp"></span>
+  <span class="muted" id="orch">orchestrator: …</span>
+</header>
+
+<main>
+  <div class="step" id="s1">
+    <h2>1 · Upload solution</h2>
+    <p class="muted" style="margin-top:0">Choose a solution zip (the same one you would import into the portal). It must contain blueprint.json and dockerinfo.json.</p>
+    <input type="file" id="file" accept=".zip" />
+    <button id="uploadBtn">Upload</button>
+    <span id="upmsg" class="muted"></span>
+  </div>
+
+  <div class="step disabled" id="s2">
+    <h2>2 · Services &amp; readiness</h2>
+    <div id="solname" style="font-weight:600; margin-bottom:8px;"></div>
+    <div id="graph"></div>
+    <table id="svcTable"><thead><tr><th>service</th><th>address</th><th>state</th></tr></thead><tbody></tbody></table>
+    <p class="muted" id="readyMsg" style="margin-bottom:0"></p>
+  </div>
+
+  <div class="step disabled" id="s3">
+    <h2>3 · Start workflow</h2>
+    <p class="muted" style="margin-top:0">Optional initial input (JSON) for the first service. Leave blank to use defaults.</p>
+    <textarea id="inputs" placeholder='e.g. {"scenario":"heat wave","factor":1.4}'></textarea>
+    <div style="margin-top:10px;"><button id="runBtn">Start workflow</button> <span id="runmsg" class="muted"></span></div>
+  </div>
+
+  <div class="step disabled" id="s4">
+    <h2>4 · Run <span id="wfstatus"></span></h2>
+    <div id="rgraph"></div>
+    <table id="taskTable"><thead><tr><th>node</th><th>status</th><th>error</th></tr></thead><tbody></tbody></table>
+    <p class="muted" id="wflink"></p>
+  </div>
+</main>
+
+<script>
+const COLORS = { pending:'#6b6b85', queued:'#c79a2e', running:'#3a78ff', completed:'#27ae60', failed:'#e74c3c', healthy:'#27ae60', up:'#c79a2e', down:'#e74c3c' };
+const color = s => COLORS[s] || '#6b6b85';
+const esc = s => (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let sid=null, graphData=null, workflowId=null, readyTimer=null, runTimer=null;
+
+async function j(path, opts) { const r = await fetch(path, opts); if (!r.ok) throw new Error((await r.text())||r.status); return r.json(); }
+
+// ----- SVG graph (shared layout) -----
+function layout(nodes, edges) {
+  const byKey={}; nodes.forEach(n=>byKey[n.key]=n);
+  const indeg={}; nodes.forEach(n=>indeg[n.key]=0); edges.forEach(e=>{if(e.to in indeg)indeg[e.to]++;});
+  const level={}; const q=nodes.filter(n=>indeg[n.key]===0).map(n=>n.key); q.forEach(k=>level[k]=0);
+  const adj={}; edges.forEach(e=>{(adj[e.from]=adj[e.from]||[]).push(e.to);});
+  const seen=new Set(q);
+  while(q.length){const k=q.shift();(adj[k]||[]).forEach(t=>{level[t]=Math.max(level[t]||0,(level[k]||0)+1);if(!seen.has(t)){seen.add(t);q.push(t);}});}
+  nodes.forEach(n=>{if(level[n.key]==null)level[n.key]=0;});
+  const cols={}; nodes.forEach(n=>{(cols[level[n.key]]=cols[level[n.key]]||[]).push(n);});
+  const COLW=210,ROWH=78,NW=170,NH=50;
+  Object.entries(cols).forEach(([lv,arr])=>arr.forEach((n,i)=>{n.x=30+(+lv)*COLW;n.y=24+i*ROWH;n.w=NW;n.h=NH;}));
+  const maxLv=Math.max(0,...Object.keys(cols).map(Number));
+  const maxRows=Math.max(1,...Object.values(cols).map(a=>a.length));
+  return {width:60+(maxLv+1)*COLW, height:48+maxRows*ROWH, byKey};
+}
+function renderGraph(g) {
+  if(!g.nodes.length) return '<p class="muted">No nodes.</p>';
+  const dim=layout(g.nodes,g.edges);
+  const edges=g.edges.map(e=>{const a=dim.byKey[e.from],b=dim.byKey[e.to];if(!a||!b)return'';
+    const x1=a.x+a.w,y1=a.y+a.h/2,x2=b.x,y2=b.y+b.h/2,mx=(x1+x2)/2;
+    return `<path class="edge" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;}).join('');
+  const ns=g.nodes.map(n=>`<g class="node"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8" fill="${color(n.status)}" stroke="#fff" opacity="0.92"/>
+    <text x="${n.x+12}" y="${n.y+22}">${esc(n.container_name)}</text>
+    <text class="op" x="${n.x+12}" y="${n.y+38}">${esc(n.operation||'')} · ${esc(n.status)}</text></g>`).join('');
+  return `<svg viewBox="0 0 ${dim.width} ${dim.height}" preserveAspectRatio="xMinYMin meet">
+    <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#9a9ab5"/></marker></defs>
+    ${edges}${ns}</svg>`;
+}
+
+function enable(id, on) { document.getElementById(id).classList.toggle('disabled', !on); }
+
+async function health() {
+  try { const h = await j('/health'); document.getElementById('orch').textContent = 'orchestrator: ' + h.orchestrator_url; }
+  catch { document.getElementById('orch').textContent = 'orchestrator: unknown'; }
+}
+
+document.getElementById('uploadBtn').onclick = async () => {
+  const f = document.getElementById('file').files[0];
+  const msg = document.getElementById('upmsg');
+  if (!f) { msg.textContent = 'Choose a zip first.'; return; }
+  msg.textContent = 'uploading…';
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    const sol = await j('/api/solutions', { method:'POST', body:fd });
+    sid = sol.id; graphData = sol.graph; workflowId = null;
+    msg.textContent = '';
+    document.getElementById('solname').textContent = sol.name;
+    document.getElementById('graph').innerHTML = renderGraph(sol.graph);
+    enable('s2', true); enable('s3', true); enable('s4', false);
+    startReadiness();
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
+};
+
+function startReadiness() {
+  if (readyTimer) clearInterval(readyTimer);
+  const poll = async () => {
+    try {
+      const r = await j(`/api/solutions/${sid}/readiness`);
+      document.querySelector('#svcTable tbody').innerHTML = r.services.map(s =>
+        `<tr><td class="k">${esc(s.container_name)}</td><td class="k">${esc(s.address)}</td>
+         <td><span class="badge" style="background:${color(s.state)}">${s.state}</span></td></tr>`).join('');
+      const rm = document.getElementById('readyMsg');
+      rm.innerHTML = r.all_ready ? '<span class="ok">All services reachable — ready to start.</span>'
+        : 'Waiting for all services to be reachable (down = not running or not on the ai-effect-services network).';
+    } catch (e) { document.getElementById('readyMsg').textContent = e.message; }
+  };
+  poll(); readyTimer = setInterval(poll, 2500);
+}
+
+function b64(str){ return btoa(unescape(encodeURIComponent(str))); }
+
+document.getElementById('runBtn').onclick = async () => {
+  const msg = document.getElementById('runmsg'); msg.textContent = 'submitting…';
+  let inputs = [];
+  const raw = document.getElementById('inputs').value.trim();
+  if (raw) {
+    try { JSON.parse(raw); } catch { msg.textContent = 'Input is not valid JSON.'; return; }
+    inputs = [{ protocol:'inline', uri:b64(raw), format:'json' }];
+  }
+  try {
+    const res = await j(`/api/solutions/${sid}/run`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({inputs}) });
+    workflowId = res.workflow_id; msg.textContent = 'submitted: ' + workflowId;
+    enable('s4', true);
+    document.getElementById('wflink').innerHTML =
+      'Full logs and data in the <a href="http://localhost:18000/ui/" target="_blank">orchestrator dashboard</a>.';
+    startRun();
+  } catch (e) { msg.textContent = 'Error: ' + e.message; }
+};
+
+function startRun() {
+  if (runTimer) clearInterval(runTimer);
+  const poll = async () => {
+    try {
+      const w = await j(`/api/workflows/${workflowId}`);
+      document.getElementById('wfstatus').innerHTML =
+        `<span class="badge" style="background:${color(w.status)}">${w.status}</span>`;
+      const statusByKey = {}; (w.tasks||[]).forEach(t => statusByKey[t.node_key] = t.status);
+      // recolor the graph using live task status
+      const g = { nodes: graphData.nodes.map(n => ({...n, status: statusByKey[n.key] || 'pending'})), edges: graphData.edges };
+      document.getElementById('rgraph').innerHTML = renderGraph(g);
+      document.querySelector('#taskTable tbody').innerHTML = (w.tasks||[]).map(t =>
+        `<tr><td class="k">${esc(t.node_key)}</td><td><span class="badge" style="background:${color(t.status)}">${t.status}</span></td><td>${esc(t.error||'')}</td></tr>`).join('');
+      if (w.status === 'completed' || w.status === 'failed') clearInterval(runTimer);
+    } catch (e) { /* keep polling */ }
+  };
+  poll(); runTimer = setInterval(poll, 2000);
+}
+
+health();
+</script>
+</body>
+</html>
