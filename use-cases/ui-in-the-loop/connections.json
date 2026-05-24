@@ -1,0 +1,18 @@
+{
+  "pipeline": {
+    "name": "UI in the Loop",
+    "description": "Human-in-the-loop demo: a controller UI submits a fresh workflow (processor -> summarizer) on each user choice",
+    "service_mapping": {
+      "processor":  {"ip_address": "processor",  "port": 8080, "webui_url": "http://localhost:18090"},
+      "summarizer": {"ip_address": "summarizer", "port": 8080}
+    },
+    "connections": [
+      {
+        "from_service": "processor",
+        "from_method": "Process",
+        "to_service": "summarizer",
+        "to_method": "Summarize"
+      }
+    ]
+  }
+}

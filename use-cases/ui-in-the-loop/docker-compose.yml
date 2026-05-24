@@ -1,0 +1,40 @@
+services:
+  processor:
+    build:
+      context: ../
+      dockerfile: ui-in-the-loop/services/processor/Dockerfile
+    ports:
+      - "18091:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_API_KEY=${SERVICE_API_KEY:-}
+
+  summarizer:
+    build:
+      context: ../
+      dockerfile: ui-in-the-loop/services/summarizer/Dockerfile
+    ports:
+      - "18092:8080"
+    environment:
+      - PORT=8080
+      - SERVICE_API_KEY=${SERVICE_API_KEY:-}
+
+  # The human-in-the-loop controller: serves the web UI and submits a fresh
+  # workflow to the orchestrator on each user action. Reaches the orchestrator
+  # API on the host (it is not on the ai-effect-services network).
+  controller:
+    build:
+      context: ./controller
+      dockerfile: Dockerfile
+    ports:
+      - "18090:8080"
+    environment:
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://host.docker.internal:18000}
+      - ORCHESTRATOR_API_KEY=${ORCHESTRATOR_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  default:
+    name: ai-effect-services
+    external: true
