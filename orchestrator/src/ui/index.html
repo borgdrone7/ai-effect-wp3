@@ -142,21 +142,48 @@ function renderGraph(g) {
     ${edgePaths}${nodeEls}</svg>`;
 }
 
+let skeletonFor = null;   // which workflow the detail skeleton was built for
+
+function buildSkeleton() {
+  document.getElementById('main').innerHTML = `
+    <section><h2 id="ghead">Graph</h2><div id="graphBox"></div></section>
+    <div class="row"><div><section><h2>Tasks</h2><div id="tasksBox"></div></section></div></div>
+    <section><h2>Output data</h2><pre id="data">Click a task with "view" to load its output.</pre></section>
+    <section><h2>Logs</h2><pre id="logsBox"></pre></section>`;
+  skeletonFor = selected;
+}
+
 async function select(id) {
   selected = id;
   document.querySelectorAll('.wf').forEach(el => el.classList.toggle('sel', el.dataset.id===id));
+  buildSkeleton();        // fresh panels (resets the data viewer) only on a new selection
   await refreshDetail();
+}
+
+async function loadTaskData(tid) {
+  const pre = document.getElementById('data');
+  if (!pre) return;
+  pre.textContent = 'loading…';
+  try {
+    const r = await api(`/workflows/${selected}/tasks/${tid}/output-data`);
+    const ct = r.headers.get('content-type') || '';
+    const body = await r.text();
+    pre.textContent = ct.includes('json') ? JSON.stringify(JSON.parse(body), null, 2) : body;
+  } catch (e) { pre.textContent = e.message; }
 }
 
 async function refreshDetail() {
   if (!selected) return;
-  const main = document.getElementById('main');
+  if (skeletonFor !== selected) buildSkeleton();   // skeleton survives polls; rebuilt only on switch
   try {
     const [graph, tasks, logs] = await Promise.all([
       (await api(`/workflows/${selected}/graph`)).json(),
       (await api(`/workflows/${selected}/tasks`)).json(),
       (await api(`/workflows/${selected}/logs?lines=120`)).text(),
     ]);
+    document.getElementById('ghead').innerHTML =
+      `Graph — ${esc(graph.name||selected)} <span class="badge" style="background:${color(graph.status)}">${graph.status}</span>`;
+    document.getElementById('graphBox').innerHTML = renderGraph(graph);
     const taskRows = tasks.tasks.map(t => `
       <tr class="task-row" data-task="${t.task_id}">
         <td class="k">${esc(t.node_key)}</td>
@@ -164,29 +191,14 @@ async function refreshDetail() {
         <td>${t.output_refs.length ? 'view' : ''}</td>
         <td>${esc(t.error||'')}</td>
       </tr>`).join('');
-    main.innerHTML = `
-      <section><h2>Graph — ${esc(graph.name||selected)}
-        <span class="badge" style="background:${color(graph.status)}">${graph.status}</span></h2>
-        ${renderGraph(graph)}</section>
-      <div class="row">
-        <div><section><h2>Tasks</h2>
-          <table><thead><tr><th>node</th><th>status</th><th>data</th><th>error</th></tr></thead>
-          <tbody>${taskRows}</tbody></table></section></div>
-      </div>
-      <section><h2>Output data</h2><pre id="data">Click a task with "view" to load its output.</pre></section>
-      <section><h2>Logs</h2><pre>${esc(logs)}</pre></section>`;
-    main.querySelectorAll('.task-row').forEach(row => row.onclick = async () => {
-      const tid = row.dataset.task;
-      const pre = document.getElementById('data');
-      pre.textContent = 'loading…';
-      try {
-        const r = await api(`/workflows/${selected}/tasks/${tid}/output-data`);
-        const ct = r.headers.get('content-type')||'';
-        const body = await r.text();
-        pre.textContent = ct.includes('json') ? JSON.stringify(JSON.parse(body), null, 2) : body;
-      } catch (e) { pre.textContent = e.message; }
-    });
-  } catch (e) { main.innerHTML = '<div class="empty">'+esc(e.message)+'</div>'; }
+    document.getElementById('tasksBox').innerHTML =
+      `<table><thead><tr><th>node</th><th>status</th><th>data</th><th>error</th></tr></thead><tbody>${taskRows}</tbody></table>`;
+    document.querySelectorAll('.task-row').forEach(row =>
+      row.onclick = () => loadTaskData(row.dataset.task));
+    document.getElementById('logsBox').textContent = logs;
+    // The data viewer (#data) is intentionally left untouched by polling, so an
+    // open result stays open; it only changes when a task row is clicked.
+  } catch (e) { document.getElementById('main').innerHTML = '<div class="empty">'+esc(e.message)+'</div>'; }
 }
 
 function tick() { health(); loadWorkflows(); refreshDetail(); }
