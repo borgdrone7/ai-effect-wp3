@@ -36,9 +36,15 @@ class ServiceEndpoint(BaseModel):
 
 
 class DockerInfoEntry(BaseModel):
-    """Entry in docker_info_list."""
+    """Entry in docker_info_list.
 
-    model_config = ConfigDict(extra="forbid")
+    Extra fields are ignored rather than rejected: a dockerinfo entry may carry
+    metadata the orchestrator does not use (for example webui_port / webui_url,
+    which are consumed by the portal to show a link to a service's web UI). The
+    orchestrator only needs container_name, ip_address, and port.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     container_name: str
     ip_address: str
