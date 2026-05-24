@@ -125,6 +125,8 @@ One entry per directory in `services/`. The key is the directory name (snake_cas
 |-------|-------------|---------|
 | `ip_address` | Hostname the orchestrator uses to reach this service | `"data-ingestion"` or `"192.168.1.50"` |
 | `port` | Port the service listens on (as seen by the orchestrator) | `8080` |
+| `webui_port` | *(optional)* Port a web interface for this service is served on, at the same host | `8062` |
+| `webui_url` | *(optional)* Full URL of the web interface, used as-is | `"https://ui.example.com/svc"` |
 
 What to put in `ip_address` and `port` depends on your deployment:
 
@@ -145,6 +147,24 @@ What to put in `ip_address` and `port` depends on your deployment:
 "data_ingestion":   {"ip_address": "10.0.1.10", "port": 8080},
 "anomaly_detector": {"ip_address": "10.0.1.20", "port": 8080}
 ```
+
+**Service with a web UI** — declare it and the portal shows a link to it on the
+service. Use `webui_port` when the UI is served on the same host as the service
+(the portal builds `http://{ip_address}:{webui_port}`); use `webui_url` when the
+UI sits behind a reverse proxy, on a remapped host port, or on a different host:
+```json
+"chat_interface": {"ip_address": "chat-interface", "port": 8080, "webui_port": 8062},
+"planner":        {"ip_address": "planner",        "port": 8080, "webui_url": "https://ui.example.com/planner"}
+```
+The generator writes these into `dockerinfo.json`. The link only opens if the UI
+is reachable from whoever views the portal — on the hosted portal
+(https://platform.ai-effect.eu) the service must be reachable from the public
+internet.
+
+> **Importing an AI4EU package directly?** You don't need our generator. The
+> portal auto-detects a `webui` container port from the package's Kubernetes
+> deployment manifests. To add or override one, add `webui_port` (or `webui_url`)
+> to the service's entry in `dockerinfo.json` and re-zip.
 
 ### connections (required)
 

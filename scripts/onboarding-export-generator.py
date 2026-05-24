@@ -296,6 +296,19 @@ class OnboardingExportGenerator:
                 "ip_address": mapping['ip_address'],
                 "port": str(mapping['port']),
             }
+
+            # Optional web UI declaration. A service with a web interface can
+            # declare it in connections.json service_mapping; we pass it through
+            # to dockerinfo.json so the portal can show a link to it.
+            #   webui_port: UI is served on this port at the service's host
+            #               (the portal builds http://{ip_address}:{webui_port})
+            #   webui_url:  full URL used verbatim (reverse proxy, remapped host
+            #               port, or a UI on a different host)
+            if 'webui_port' in mapping:
+                docker_info['webui_port'] = mapping['webui_port']
+            if 'webui_url' in mapping:
+                docker_info['webui_url'] = mapping['webui_url']
+
             docker_info_list.append(docker_info)
 
         return {"docker_info_list": docker_info_list}
