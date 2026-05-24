@@ -1,0 +1,102 @@
+{
+    "nodes": [
+        {
+            "proto_uri": "microservice/data_analyzer1.proto",
+            "image": "borgdrone7/ai-effect-file-based-data-analyzer:latest",
+            "node_type": "MLModel",
+            "container_name": "data_analyzer1",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "report_generator1",
+                            "operation_signature": {
+                                "operation_name": "GenerateReport"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "AnalyzeData",
+                        "output_message_name": "AnalyzeDataResponse",
+                        "input_message_name": "AnalyzeDataRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/data_generator1.proto",
+            "image": "borgdrone7/ai-effect-file-based-data-generator:latest",
+            "node_type": "MLModel",
+            "container_name": "data_generator1",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "data_analyzer1",
+                            "operation_signature": {
+                                "operation_name": "AnalyzeData"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "GenerateData",
+                        "output_message_name": "GenerateDataResponse",
+                        "input_message_name": "GenerateDataRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/input_provider1.proto",
+            "image": "borgdrone7/ai-effect-file-based-input-provider:latest",
+            "node_type": "DataSource",
+            "container_name": "input_provider1",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "data_generator1",
+                            "operation_signature": {
+                                "operation_name": "GenerateData"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "GetConfiguration",
+                        "output_message_name": "GetConfigurationResponse",
+                        "input_message_name": "GetConfigurationRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/report_generator1.proto",
+            "image": "borgdrone7/ai-effect-file-based-report-generator:latest",
+            "node_type": "DataSink",
+            "container_name": "report_generator1",
+            "operation_signature_list": [
+                {
+                    "connected_to": [],
+                    "operation_signature": {
+                        "operation_name": "GenerateReport",
+                        "output_message_name": "GenerateReportResponse",
+                        "input_message_name": "GenerateReportRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        }
+    ],
+    "name": "File Based Energy Pipeline-Hub",
+    "pipeline_id": "6536f177-ae66-40a1-b9c9-af8a6fabeaba",
+    "creation_date": "2026-05-25 02:11:55.145914",
+    "type": "pipeline-topology/v2",
+    "version": "2.0"
+}
