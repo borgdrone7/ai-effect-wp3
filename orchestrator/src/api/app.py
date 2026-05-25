@@ -452,6 +452,68 @@ class OrchestratorAPI:
             return {"protocol": protocol, "uri": ref.uri, "format": fmt,
                     "note": "Data is not inline or HTTP; open it with the appropriate client."}
 
+        # ----- Solution views: a controller publishes a logical graph + live
+        # state, and the dashboard renders it. This lets human-in-the-loop /
+        # multi-stage controllers show a full graph (with paused/blocked nodes)
+        # in the orchestrator UI without writing any graph-rendering code.
+
+        @app.put("/solutions/{view_id}", dependencies=[Depends(_verify_orchestrator_key)])
+        def put_solution_view(view_id: str, body: dict) -> dict:
+            """Register/replace a logical graph. body: {name, nodes[], edges[]}."""
+            self._redis.set(f"solutionview:{view_id}", json.dumps({
+                "name": body.get("name", view_id),
+                "nodes": body.get("nodes", []),
+                "edges": body.get("edges", []),
+            }))
+            self._redis.sadd("solutionviews", view_id)
+            return {"ok": True}
+
+        @app.put("/solutions/{view_id}/state", dependencies=[Depends(_verify_orchestrator_key)])
+        def put_solution_state(view_id: str, body: dict) -> dict:
+            """Update live state. body: {statuses{key:status}, stage?, message?, detail?}."""
+            if not self._redis.exists(f"solutionview:{view_id}"):
+                raise HTTPException(status_code=404, detail="Solution view not found")
+            from datetime import datetime, timezone
+            body = dict(body)
+            body["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._redis.set(f"solutionview:{view_id}:state", json.dumps(body))
+            return {"ok": True}
+
+        @app.get("/solutions", dependencies=[Depends(_verify_orchestrator_key)])
+        def list_solution_views() -> dict:
+            ids = self._redis.smembers("solutionviews") or set()
+            items = []
+            for vid in ids:
+                vid = vid.decode() if isinstance(vid, bytes) else vid
+                graw = self._redis.get(f"solutionview:{vid}")
+                if not graw:
+                    self._redis.srem("solutionviews", vid)
+                    continue
+                g = json.loads(graw)
+                sraw = self._redis.get(f"solutionview:{vid}:state")
+                st = json.loads(sraw) if sraw else {}
+                items.append({"view_id": vid, "name": g.get("name"),
+                              "stage": st.get("stage"), "updated_at": st.get("updated_at")})
+            items.sort(key=lambda i: i.get("updated_at") or "", reverse=True)
+            return {"solutions": items}
+
+        @app.get("/solutions/{view_id}", dependencies=[Depends(_verify_orchestrator_key)])
+        def get_solution_view(view_id: str) -> dict:
+            graw = self._redis.get(f"solutionview:{view_id}")
+            if not graw:
+                raise HTTPException(status_code=404, detail="Solution view not found")
+            g = json.loads(graw)
+            sraw = self._redis.get(f"solutionview:{view_id}:state")
+            st = json.loads(sraw) if sraw else {}
+            return {"view_id": view_id, "name": g.get("name"),
+                    "nodes": g.get("nodes", []), "edges": g.get("edges", []), "state": st}
+
+        @app.delete("/solutions/{view_id}", dependencies=[Depends(_verify_orchestrator_key)])
+        def delete_solution_view(view_id: str) -> dict:
+            self._redis.delete(f"solutionview:{view_id}", f"solutionview:{view_id}:state")
+            self._redis.srem("solutionviews", view_id)
+            return {"ok": True}
+
         # ----- Serve the bundled dashboard UI ------------------------------
         ui_dir = Path(__file__).resolve().parent.parent / "ui"
         if ui_dir.exists():

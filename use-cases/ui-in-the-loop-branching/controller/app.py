@@ -104,8 +104,41 @@ STATE = {
 }
 
 
+VIEW_ID = "uitl-branching"
+STAGE_MSG = {
+    "idle": "Set a factor and start.",
+    "stage1": "Stage 1 running: A fans out to B (above) and C1 -> C2 (below).",
+    "awaiting": "Paused at C2 — held here awaiting a human decision. C3 is blocked.",
+    "stage2": "Stage 2: C3 joins B and C2.",
+    "done": "Finished.",
+}
+
+
 def _headers():
     return {"Authorization": f"Bearer {ORCHESTRATOR_API_KEY}"} if ORCHESTRATOR_API_KEY else {}
+
+
+def _publish_graph():
+    """Register the full logical graph with the orchestrator (drawn by the dashboard)."""
+    nodes = [{"key": n["key"], "label": n["label"]} for n in FULL_GRAPH["nodes"]]
+    try:
+        with httpx.Client(timeout=10.0) as c:
+            c.put(f"{ORCHESTRATOR_URL}/solutions/{VIEW_ID}",
+                  json={"name": "Branching UI in the Loop", "nodes": nodes, "edges": FULL_GRAPH["edges"]},
+                  headers=_headers())
+    except httpx.HTTPError:
+        pass
+
+
+def _publish_state(statuses, stage, detail=None):
+    try:
+        with httpx.Client(timeout=10.0) as c:
+            c.put(f"{ORCHESTRATOR_URL}/solutions/{VIEW_ID}/state",
+                  json={"statuses": statuses, "stage": stage,
+                        "message": STAGE_MSG.get(stage, ""), "detail": detail},
+                  headers=_headers())
+    except httpx.HTTPError:
+        pass
 
 
 def _inline(obj):
@@ -151,6 +184,8 @@ def start(req: StartReq):
                   "c2_output": None, "final": None, "factor": req.factor,
                   "iteration": 1, "history": []})
     STATE["stage1_wf"] = _submit(STAGE1_BLUEPRINT, [_inline({"factor": req.factor, "kind": "init"})])
+    _publish_graph()
+    _publish_state({k: "pending" for k in NODE_KEY}, "stage1")
     return {"ok": True}
 
 
@@ -226,6 +261,11 @@ def _status_map():
 @app.get("/api/state")
 def state():
     statuses = _status_map()
+    # Publish live state to the orchestrator so the dashboard can render the
+    # full graph (with paused/blocked nodes) without any graph code here.
+    detail = (STATE["c2_output"] if STATE["stage"] == "awaiting"
+              else STATE["final"] if STATE["stage"] == "done" else None)
+    _publish_state(statuses, STATE["stage"], detail)
     return {
         "stage": STATE["stage"], "iteration": STATE["iteration"], "factor": STATE["factor"],
         "statuses": {k: v for k, v in statuses.items() if not k.startswith("_")},
@@ -277,8 +317,10 @@ INDEX_HTML = r"""<!doctype html>
 <body>
 <header><h1>Branching UI in the Loop</h1><span class="sp" style="flex:1"></span><span class="muted" id="orch"></span></header>
 <main>
-  <div class="card"><h2>Pipeline</h2><div id="graph"></div>
-    <div class="muted" id="stagemsg" style="margin-top:8px;"></div></div>
+  <div class="card"><h2>Status</h2>
+    <div class="muted" id="stagemsg"></div>
+    <p style="margin-top:10px"><a href="http://localhost:18000/ui/" target="_blank" rel="noopener">See the live pipeline graph in the orchestrator dashboard &#8599;</a>
+    <span class="muted">&nbsp;(Solutions tab &rarr; "Branching UI in the Loop")</span></p></div>
 
   <div class="card" id="controls"><h2>Control</h2><div id="ctl"></div></div>
 
@@ -290,31 +332,6 @@ INDEX_HTML = r"""<!doctype html>
 const COL={pending:'#6b6b85',blocked:'#3a3a55',running:'#3a78ff',awaiting:'#e0a020',completed:'#27ae60',failed:'#e74c3c'};
 const col=s=>COL[s]||'#6b6b85'; const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function j(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error(await r.text());return r.json();}
-
-function layout(nodes,edges){
-  const byk={};nodes.forEach(n=>byk[n.key]=n);
-  const indeg={};nodes.forEach(n=>indeg[n.key]=0);edges.forEach(e=>{if(e.to in indeg)indeg[e.to]++;});
-  const lvl={};const q=nodes.filter(n=>indeg[n.key]===0).map(n=>n.key);q.forEach(k=>lvl[k]=0);
-  const adj={};edges.forEach(e=>{(adj[e.from]=adj[e.from]||[]).push(e.to);});const seen=new Set(q);
-  while(q.length){const k=q.shift();(adj[k]||[]).forEach(t=>{lvl[t]=Math.max(lvl[t]||0,(lvl[k]||0)+1);if(!seen.has(t)){seen.add(t);q.push(t);}});}
-  nodes.forEach(n=>{if(lvl[n.key]==null)lvl[n.key]=0;});
-  const cols={};nodes.forEach(n=>{(cols[lvl[n.key]]=cols[lvl[n.key]]||[]).push(n);});
-  const CW=200,RH=80,NW=150,NH=52;
-  Object.entries(cols).forEach(([l,a])=>a.forEach((n,i)=>{n.x=30+(+l)*CW;n.y=24+i*RH;n.w=NW;n.h=NH;}));
-  const mx=Math.max(0,...Object.keys(cols).map(Number)),mr=Math.max(1,...Object.values(cols).map(a=>a.length));
-  return{width:60+(mx+1)*CW,height:48+mr*RH,byk};
-}
-function drawGraph(graph,statuses){
-  const nodes=graph.nodes.map(n=>({...n}));const d=layout(nodes,graph.edges);
-  const E=graph.edges.map(e=>{const a=d.byk[e.from],b=d.byk[e.to];if(!a||!b)return'';
-    const x1=a.x+a.w,y1=a.y+a.h/2,x2=b.x,y2=b.y+b.h/2,m=(x1+x2)/2;
-    return `<path class="edge" d="M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}"/>`;}).join('');
-  const N=nodes.map(n=>{const st=statuses[n.key]||'pending';
-    return `<g class="node"><rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="9" fill="${col(st)}" stroke="#fff" opacity="0.92"/>
-      <text x="${n.x+12}" y="${n.y+22}">${esc(n.label)}</text><text class="st" x="${n.x+12}" y="${n.y+40}">${esc(st)}</text></g>`;}).join('');
-  return `<svg viewBox="0 0 ${d.width} ${d.height}" preserveAspectRatio="xMinYMin meet">
-    <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#9a9ab5"/></marker></defs>${E}${N}</svg>`;
-}
 
 function renderControls(s){
   const ctl=document.getElementById('ctl');
@@ -354,7 +371,6 @@ let last='';
 async function tick(){
   try{
     const s=await j('/api/state');
-    document.getElementById('graph').innerHTML=drawGraph(s.graph,s.statuses);
     document.getElementById('stagemsg').textContent=STAGEMSG[s.stage]||'';
     const sig=s.stage+JSON.stringify(s.c2_output)+JSON.stringify(s.final);
     if(sig!==last){renderControls(s);last=sig;}
