@@ -1,0 +1,61 @@
+{
+  "pipeline": {
+    "name": "Branching UI in the Loop",
+    "description": "Branching human-in-the-loop demo: A fans out to B (above) and C1->C2->C3 (below); the flow pauses at C2 for a human decision, then either loops back to A or continues to the C3 join (B + C2).",
+    "service_mapping": {
+      "a": {
+        "ip_address": "a",
+        "port": 8080,
+        "webui_url": "http://localhost:18510"
+      },
+      "b": {
+        "ip_address": "b",
+        "port": 8080
+      },
+      "c1": {
+        "ip_address": "c1",
+        "port": 8080
+      },
+      "c2": {
+        "ip_address": "c2",
+        "port": 8080
+      },
+      "c3": {
+        "ip_address": "c3",
+        "port": 8080
+      }
+    },
+    "connections": [
+      {
+        "from_service": "a",
+        "from_method": "Root",
+        "to_service": "b",
+        "to_method": "Headroom"
+      },
+      {
+        "from_service": "a",
+        "from_method": "Root",
+        "to_service": "c1",
+        "to_method": "Normalize"
+      },
+      {
+        "from_service": "c1",
+        "from_method": "Normalize",
+        "to_service": "c2",
+        "to_method": "Assess"
+      },
+      {
+        "from_service": "c2",
+        "from_method": "Assess",
+        "to_service": "c3",
+        "to_method": "Finalize"
+      },
+      {
+        "from_service": "b",
+        "from_method": "Headroom",
+        "to_service": "c3",
+        "to_method": "Finalize"
+      }
+    ]
+  }
+}

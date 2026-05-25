@@ -1,0 +1,36 @@
+services:
+  a:
+    build: {context: ../, dockerfile: ui-in-the-loop-branching/services/a/Dockerfile}
+    ports: ["18511:8080"]
+    environment: ["PORT=8080", "SERVICE_API_KEY=${SERVICE_API_KEY:-}"]
+  b:
+    build: {context: ../, dockerfile: ui-in-the-loop-branching/services/b/Dockerfile}
+    ports: ["18512:8080"]
+    environment: ["PORT=8080", "SERVICE_API_KEY=${SERVICE_API_KEY:-}"]
+  c1:
+    build: {context: ../, dockerfile: ui-in-the-loop-branching/services/c1/Dockerfile}
+    ports: ["18513:8080"]
+    environment: ["PORT=8080", "SERVICE_API_KEY=${SERVICE_API_KEY:-}"]
+  c2:
+    build: {context: ../, dockerfile: ui-in-the-loop-branching/services/c2/Dockerfile}
+    ports: ["18514:8080"]
+    environment: ["PORT=8080", "SERVICE_API_KEY=${SERVICE_API_KEY:-}"]
+  c3:
+    build: {context: ../, dockerfile: ui-in-the-loop-branching/services/c3/Dockerfile}
+    ports: ["18515:8080"]
+    environment: ["PORT=8080", "SERVICE_API_KEY=${SERVICE_API_KEY:-}"]
+
+  # The branching human-in-the-loop controller: serves the full-graph UI and
+  # runs the two DAG stages, pausing at C2 for the human decision.
+  controller:
+    build: {context: ./controller, dockerfile: Dockerfile}
+    ports: ["18510:8080"]
+    environment:
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://host.docker.internal:18000}
+      - ORCHESTRATOR_API_KEY=${ORCHESTRATOR_API_KEY:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+networks:
+  default:
+    name: ai-effect-services
+    external: true

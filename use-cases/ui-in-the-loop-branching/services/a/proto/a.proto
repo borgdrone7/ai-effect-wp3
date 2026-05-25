@@ -1,0 +1,10 @@
+syntax = "proto3";
+package ui_in_the_loop_branching;
+
+// Node A of the branching human-in-the-loop demo.
+service RootService {
+  rpc Root(RootRequest) returns (RootResponse);
+}
+
+message RootRequest { string payload = 1; }
+message RootResponse { string result = 1; }

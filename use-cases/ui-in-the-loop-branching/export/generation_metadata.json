@@ -1,0 +1,32 @@
+{
+    "use_case_name": "ui-in-the-loop-branching",
+    "use_case_directory": "ui-in-the-loop-branching",
+    "source_path": "../../use-cases/ui-in-the-loop-branching",
+    "services": [
+        {
+            "service_name": "a",
+            "container_name": "a1",
+            "image_name": "ui-in-the-loop-branching-a:latest"
+        },
+        {
+            "service_name": "b",
+            "container_name": "b1",
+            "image_name": "ui-in-the-loop-branching-b:latest"
+        },
+        {
+            "service_name": "c1",
+            "container_name": "c11",
+            "image_name": "ui-in-the-loop-branching-c1:latest"
+        },
+        {
+            "service_name": "c2",
+            "container_name": "c21",
+            "image_name": "ui-in-the-loop-branching-c2:latest"
+        },
+        {
+            "service_name": "c3",
+            "container_name": "c31",
+            "image_name": "ui-in-the-loop-branching-c3:latest"
+        }
+    ]
+}

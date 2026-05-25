@@ -1,0 +1,133 @@
+{
+    "nodes": [
+        {
+            "proto_uri": "microservice/a1.proto",
+            "image": "ui-in-the-loop-branching-a:latest",
+            "node_type": "DataSource",
+            "container_name": "a1",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "b1",
+                            "operation_signature": {
+                                "operation_name": "Headroom"
+                            }
+                        },
+                        {
+                            "container_name": "c11",
+                            "operation_signature": {
+                                "operation_name": "Normalize"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "Root",
+                        "output_message_name": "RootResponse",
+                        "input_message_name": "RootRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/b1.proto",
+            "image": "ui-in-the-loop-branching-b:latest",
+            "node_type": "MLModel",
+            "container_name": "b1",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "c31",
+                            "operation_signature": {
+                                "operation_name": "Finalize"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "Headroom",
+                        "output_message_name": "HeadroomResponse",
+                        "input_message_name": "HeadroomRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/c11.proto",
+            "image": "ui-in-the-loop-branching-c1:latest",
+            "node_type": "MLModel",
+            "container_name": "c11",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "c21",
+                            "operation_signature": {
+                                "operation_name": "Assess"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "Normalize",
+                        "output_message_name": "NormalizeResponse",
+                        "input_message_name": "NormalizeRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/c21.proto",
+            "image": "ui-in-the-loop-branching-c2:latest",
+            "node_type": "MLModel",
+            "container_name": "c21",
+            "operation_signature_list": [
+                {
+                    "connected_to": [
+                        {
+                            "container_name": "c31",
+                            "operation_signature": {
+                                "operation_name": "Finalize"
+                            }
+                        }
+                    ],
+                    "operation_signature": {
+                        "operation_name": "Assess",
+                        "output_message_name": "AssessResponse",
+                        "input_message_name": "AssessRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        },
+        {
+            "proto_uri": "microservice/c31.proto",
+            "image": "ui-in-the-loop-branching-c3:latest",
+            "node_type": "DataSink",
+            "container_name": "c31",
+            "operation_signature_list": [
+                {
+                    "connected_to": [],
+                    "operation_signature": {
+                        "operation_name": "Finalize",
+                        "output_message_name": "FinalizeResponse",
+                        "input_message_name": "FinalizeRequest",
+                        "output_message_stream": false,
+                        "input_message_stream": false
+                    }
+                }
+            ]
+        }
+    ],
+    "name": "Ui-In-The-Loop-Branching",
+    "pipeline_id": "6c4a9b24-5866-4d03-9769-f0f38c2a5925",
+    "creation_date": "2026-05-25 17:19:27.780396",
+    "type": "pipeline-topology/v2",
+    "version": "2.0"
+}

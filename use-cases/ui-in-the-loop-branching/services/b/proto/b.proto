@@ -1,0 +1,10 @@
+syntax = "proto3";
+package ui_in_the_loop_branching;
+
+// Node B of the branching human-in-the-loop demo.
+service HeadroomService {
+  rpc Headroom(HeadroomRequest) returns (HeadroomResponse);
+}
+
+message HeadroomRequest { string payload = 1; }
+message HeadroomResponse { string result = 1; }

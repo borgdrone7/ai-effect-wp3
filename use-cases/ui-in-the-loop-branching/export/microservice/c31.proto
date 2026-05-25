@@ -1,0 +1,10 @@
+syntax = "proto3";
+package ui_in_the_loop_branching;
+
+// Node C3 of the branching human-in-the-loop demo.
+service FinalizeService {
+  rpc Finalize(FinalizeRequest) returns (FinalizeResponse);
+}
+
+message FinalizeRequest { string payload = 1; }
+message FinalizeResponse { string result = 1; }

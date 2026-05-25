@@ -1,0 +1,30 @@
+{
+    "docker_info_list": [
+        {
+            "container_name": "a1",
+            "ip_address": "a",
+            "port": "8080",
+            "webui_url": "http://localhost:18510"
+        },
+        {
+            "container_name": "b1",
+            "ip_address": "b",
+            "port": "8080"
+        },
+        {
+            "container_name": "c11",
+            "ip_address": "c1",
+            "port": "8080"
+        },
+        {
+            "container_name": "c21",
+            "ip_address": "c2",
+            "port": "8080"
+        },
+        {
+            "container_name": "c31",
+            "ip_address": "c3",
+            "port": "8080"
+        }
+    ]
+}

@@ -1,0 +1,10 @@
+syntax = "proto3";
+package ui_in_the_loop_branching;
+
+// Node C2 of the branching human-in-the-loop demo.
+service AssessService {
+  rpc Assess(AssessRequest) returns (AssessResponse);
+}
+
+message AssessRequest { string payload = 1; }
+message AssessResponse { string result = 1; }
