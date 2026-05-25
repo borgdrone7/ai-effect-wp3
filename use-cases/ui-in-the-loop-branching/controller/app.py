@@ -29,10 +29,11 @@ import json
 import os
 import time
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+from common.controller import OrchestratorClient, inline, decode
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://host.docker.internal:18000").rstrip("/")
 ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY", "")
@@ -114,58 +115,27 @@ STAGE_MSG = {
 }
 
 
-def _headers():
-    return {"Authorization": f"Bearer {ORCHESTRATOR_API_KEY}"} if ORCHESTRATOR_API_KEY else {}
+# Shared orchestrator client + inline helpers (see common/controller.py).
+_oc = OrchestratorClient(base_url=ORCHESTRATOR_URL, api_key=ORCHESTRATOR_API_KEY)
+_inline = inline
+_decode = decode
 
 
 def _publish_graph():
-    """Register the full logical graph with the orchestrator (drawn by the dashboard)."""
     nodes = [{"key": n["key"], "label": n["label"]} for n in FULL_GRAPH["nodes"]]
-    try:
-        with httpx.Client(timeout=10.0) as c:
-            c.put(f"{ORCHESTRATOR_URL}/solutions/{VIEW_ID}",
-                  json={"name": "Branching UI in the Loop", "nodes": nodes, "edges": FULL_GRAPH["edges"]},
-                  headers=_headers())
-    except httpx.HTTPError:
-        pass
+    _oc.publish_graph(VIEW_ID, "Branching UI in the Loop", nodes, FULL_GRAPH["edges"])
 
 
 def _publish_state(statuses, stage, detail=None):
-    try:
-        with httpx.Client(timeout=10.0) as c:
-            c.put(f"{ORCHESTRATOR_URL}/solutions/{VIEW_ID}/state",
-                  json={"statuses": statuses, "stage": stage,
-                        "message": STAGE_MSG.get(stage, ""), "detail": detail},
-                  headers=_headers())
-    except httpx.HTTPError:
-        pass
-
-
-def _inline(obj):
-    return {"protocol": "inline", "uri": base64.b64encode(json.dumps(obj).encode()).decode(), "format": "json"}
-
-
-def _decode(ref):
-    if ref and ref.get("protocol") == "inline":
-        return json.loads(base64.b64decode(ref.get("uri", "")).decode())
-    return {}
+    _oc.publish_state(VIEW_ID, statuses, stage=stage, message=STAGE_MSG.get(stage, ""), detail=detail)
 
 
 def _submit(blueprint, inputs):
-    with httpx.Client(timeout=30.0) as c:
-        r = c.post(f"{ORCHESTRATOR_URL}/workflows",
-                   json={"blueprint": blueprint, "dockerinfo": DOCKERINFO, "inputs": inputs},
-                   headers=_headers())
-    if r.status_code != 200:
-        raise HTTPException(502, f"Orchestrator rejected submit ({r.status_code}): {r.text}")
-    return r.json().get("workflow_id")
+    return _oc.submit(blueprint, DOCKERINFO, inputs)
 
 
 def _wf(workflow_id):
-    with httpx.Client(timeout=15.0) as c:
-        s = c.get(f"{ORCHESTRATOR_URL}/workflows/{workflow_id}", headers=_headers()).json()
-        t = c.get(f"{ORCHESTRATOR_URL}/workflows/{workflow_id}/tasks", headers=_headers()).json()
-    return s.get("status"), {task["node_key"]: task for task in t.get("tasks", [])}
+    return _oc.workflow(workflow_id)
 
 
 class StartReq(BaseModel):

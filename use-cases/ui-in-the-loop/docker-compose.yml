@@ -24,8 +24,8 @@ services:
   # API on the host (it is not on the ai-effect-services network).
   controller:
     build:
-      context: ./controller
-      dockerfile: Dockerfile
+      context: ../
+      dockerfile: ui-in-the-loop/controller/Dockerfile
     ports:
       - "18090:8080"
     environment:

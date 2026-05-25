@@ -30,20 +30,20 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
+from orchestrator_client import OrchestratorClient
+
 ORCHESTRATOR_URL = os.environ.get(
     "ORCHESTRATOR_URL", "http://host.docker.internal:18000"
 ).rstrip("/")
-ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY", "")
 
 app = FastAPI(title="AI-EFFECT Launcher", version="1.0.0")
+
+# Shared orchestrator client (reads ORCHESTRATOR_URL / API key from env).
+_oc = OrchestratorClient()
 
 # In-memory store of uploaded solutions. This is a single-user local tool, so a
 # process-lifetime dict is enough; nothing here needs to survive a restart.
 SOLUTIONS: dict[str, dict] = {}
-
-
-def _orch_headers() -> dict:
-    return {"Authorization": f"Bearer {ORCHESTRATOR_API_KEY}"} if ORCHESTRATOR_API_KEY else {}
 
 
 def _read_zip_member(zf: zipfile.ZipFile, name: str) -> dict | None:
@@ -215,31 +215,26 @@ def run_solution(sid: str, body: dict | None = None):
         raise HTTPException(404, "Solution not found (re-upload it)")
 
     inputs = (body or {}).get("inputs") or []
-    payload = {"blueprint": sol["blueprint"], "dockerinfo": sol["dockerinfo"], "inputs": inputs}
     try:
-        with httpx.Client(timeout=30.0) as client:
-            r = client.post(f"{ORCHESTRATOR_URL}/workflows", json=payload, headers=_orch_headers())
+        workflow_id = _oc.submit(sol["blueprint"], sol["dockerinfo"], inputs)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"Orchestrator rejected submit ({e.response.status_code}): {e.response.text}")
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Could not reach orchestrator at {ORCHESTRATOR_URL}: {e}")
-    if r.status_code != 200:
-        raise HTTPException(502, f"Orchestrator rejected submit ({r.status_code}): {r.text}")
-    return {"workflow_id": r.json().get("workflow_id")}
+    return {"workflow_id": workflow_id}
 
 
 @app.get("/api/workflows/{workflow_id}")
 def workflow_status(workflow_id: str):
     """Proxy the orchestrator's status + tasks for live monitoring."""
     try:
-        with httpx.Client(timeout=15.0) as client:
-            s = client.get(f"{ORCHESTRATOR_URL}/workflows/{workflow_id}", headers=_orch_headers())
-            if s.status_code == 404:
-                raise HTTPException(404, "Workflow not found")
-            t = client.get(f"{ORCHESTRATOR_URL}/workflows/{workflow_id}/tasks", headers=_orch_headers())
+        return _oc.workflow_view(workflow_id)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(404, "Workflow not found")
+        raise HTTPException(502, f"Orchestrator error: {e}")
     except httpx.HTTPError as e:
         raise HTTPException(502, f"Could not reach orchestrator: {e}")
-    status = s.json()
-    tasks = t.json().get("tasks", []) if t.status_code == 200 else []
-    return {"status": status.get("status"), "error": status.get("error"), "tasks": tasks}
 
 
 @app.get("/health")

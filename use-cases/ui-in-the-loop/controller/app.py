@@ -13,20 +13,13 @@ Environment:
   PORT               Port to serve on (default 8080).
 """
 
-import base64
-import json
-import os
 import time
 
-import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-ORCHESTRATOR_URL = os.environ.get(
-    "ORCHESTRATOR_URL", "http://host.docker.internal:18000"
-).rstrip("/")
-ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY", "")
+from common.controller import OrchestratorClient, inline
 
 # The inner pipeline this controller runs on every user action.
 BLUEPRINT = {
@@ -91,65 +84,27 @@ class RunRequest(BaseModel):
     factor: float = 1.0
 
 
-def _auth_headers() -> dict:
-    return {"Authorization": f"Bearer {ORCHESTRATOR_API_KEY}"} if ORCHESTRATOR_API_KEY else {}
-
-
-def _decode_inline(ref: dict) -> dict:
-    if ref and ref.get("protocol") == "inline":
-        return json.loads(base64.b64decode(ref.get("uri", "")).decode())
-    return {}
+oc = OrchestratorClient()
 
 
 @app.post("/run")
 def run(req: RunRequest):
     """Submit one workflow for the user's choice, wait, return the result."""
-    user_input = base64.b64encode(
-        json.dumps({"scenario": req.scenario, "factor": req.factor}).encode()
-    ).decode()
+    workflow_id = oc.submit(BLUEPRINT, DOCKERINFO,
+                            [inline({"scenario": req.scenario, "factor": req.factor})])
 
-    payload = {
-        "blueprint": BLUEPRINT,
-        "dockerinfo": DOCKERINFO,
-        "inputs": [{"protocol": "inline", "uri": user_input, "format": "json"}],
-    }
+    deadline = time.time() + 60
+    status = "pending"
+    while time.time() < deadline:
+        status, _ = oc.workflow(workflow_id)
+        if status in ("completed", "failed"):
+            break
+        time.sleep(1.0)
 
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.post(
-            f"{ORCHESTRATOR_URL}/workflows", json=payload, headers=_auth_headers()
-        )
-        if resp.status_code != 200:
-            raise HTTPException(502, f"Orchestrator rejected submit: {resp.text}")
-        workflow_id = resp.json().get("workflow_id")
+    if status != "completed":
+        return {"workflow_id": workflow_id, "status": status, "error": "failed or timed out"}
 
-        # Poll until the workflow finishes.
-        deadline = time.time() + 60
-        status = "pending"
-        while time.time() < deadline:
-            s = client.get(
-                f"{ORCHESTRATOR_URL}/workflows/{workflow_id}", headers=_auth_headers()
-            ).json()
-            status = s.get("status")
-            if status in ("completed", "failed"):
-                break
-            time.sleep(1.0)
-
-        if status != "completed":
-            detail = s.get("error") if "s" in dir() else "timed out"
-            return {"workflow_id": workflow_id, "status": status, "error": detail}
-
-        # Pull the summarizer task output (inline DataReference).
-        tasks = client.get(
-            f"{ORCHESTRATOR_URL}/workflows/{workflow_id}/tasks", headers=_auth_headers()
-        ).json()
-
-    result = {}
-    for task in tasks.get("tasks", []):
-        if task.get("node_key", "").startswith("summarizer"):
-            for ref in task.get("output_refs", []):
-                result = _decode_inline(ref)
-                break
-
+    result = oc.task_output(workflow_id, "summarizer")
     return {"workflow_id": workflow_id, "status": "completed", "result": result}
 
 

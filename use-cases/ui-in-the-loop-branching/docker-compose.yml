@@ -23,7 +23,7 @@ services:
   # The branching human-in-the-loop controller: serves the full-graph UI and
   # runs the two DAG stages, pausing at C2 for the human decision.
   controller:
-    build: {context: ./controller, dockerfile: Dockerfile}
+    build: {context: ../, dockerfile: ui-in-the-loop-branching/controller/Dockerfile}
     ports: ["18510:8080"]
     environment:
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://host.docker.internal:18000}

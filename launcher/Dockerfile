@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+COPY orchestrator_client.py .
 COPY ui/ ./ui/
 
 EXPOSE 8000
