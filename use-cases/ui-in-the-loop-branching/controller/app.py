@@ -34,6 +34,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from common.controller import OrchestratorClient, inline, decode
+from pathlib import Path
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://host.docker.internal:18000").rstrip("/")
 ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY", "")
@@ -262,94 +263,5 @@ def index():
     return INDEX_HTML
 
 
-INDEX_HTML = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Branching UI in the Loop</title>
-<style>
-  :root{--bg:#0f1020;--panel:#1a1b33;--line:#2c2d4a;--txt:#e8e8f2;--muted:#9a9ab5;}
-  *{box-sizing:border-box;} body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--txt);}
-  header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;gap:14px;align-items:center;}
-  header h1{font-size:1.05rem;margin:0;} .muted{color:var(--muted);}
-  main{max-width:900px;margin:0 auto;padding:22px;}
-  .card{border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px;background:var(--panel);}
-  h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:0 0 10px;}
-  svg{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;}
-  .node text{fill:#fff;font-size:12px;font-weight:600;} .node .st{fill:#e8e8f2;font-size:10px;opacity:.85;}
-  .edge{stroke:var(--muted);stroke-width:1.6;fill:none;marker-end:url(#ar);}
-  button{background:#3a78ff;border:0;color:#fff;padding:9px 16px;border-radius:7px;font-weight:600;cursor:pointer;}
-  button.sec{background:var(--panel);border:1px solid var(--line);color:var(--txt);}
-  button:disabled{opacity:.5;cursor:default;}
-  input{background:var(--bg);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:7px;width:120px;}
-  .badge{display:inline-block;padding:2px 9px;border-radius:11px;font-size:.7rem;font-weight:700;color:#fff;}
-  table{width:100%;border-collapse:collapse;font-size:.82rem;} td,th{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-</style></head>
-<body>
-<header><h1>Branching UI in the Loop</h1><span class="sp" style="flex:1"></span><span class="muted" id="orch"></span></header>
-<main>
-  <div class="card"><h2>Status</h2>
-    <div class="muted" id="stagemsg"></div>
-    <p style="margin-top:10px"><a href="http://localhost:18000/ui/" target="_blank" rel="noopener">See the live pipeline graph in the orchestrator dashboard &#8599;</a>
-    <span class="muted">&nbsp;(Solutions tab &rarr; "Branching UI in the Loop")</span></p></div>
-
-  <div class="card" id="controls"><h2>Control</h2><div id="ctl"></div></div>
-
-  <div class="card"><h2>Iterations</h2>
-    <table id="hist"><thead><tr><th>#</th><th>factor</th><th>peak</th><th>decision</th></tr></thead><tbody></tbody></table>
-  </div>
-</main>
-<script>
-const COL={pending:'#6b6b85',blocked:'#3a3a55',running:'#3a78ff',awaiting:'#e0a020',completed:'#27ae60',failed:'#e74c3c'};
-const col=s=>COL[s]||'#6b6b85'; const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-async function j(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error(await r.text());return r.json();}
-
-function renderControls(s){
-  const ctl=document.getElementById('ctl');
-  if(s.stage==='idle'){
-    ctl.innerHTML=`<div class="row"><label>Demand factor</label><input id="factor" type="number" step="0.1" min="0.5" max="2.5" value="1.0"/>
-      <button id="startBtn">Start</button></div>`;
-    document.getElementById('startBtn').onclick=async()=>{await j('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({factor:parseFloat(document.getElementById('factor').value)})});};
-  } else if(s.stage==='stage1'){ ctl.innerHTML=`<div class="muted">Running stage 1 (A, B, C1, C2)…</div>`; }
-  else if(s.stage==='awaiting'){
-    const a=s.c2_output||{};
-    ctl.innerHTML=`<div style="margin-bottom:10px"><span class="badge" style="background:${a.over_threshold?'#e74c3c':'#27ae60'}">${a.over_threshold?'over threshold':'within threshold'}</span>
-      &nbsp; ${esc(a.message||'')} (factor ${esc(a.factor)})</div>
-      <div class="row">
-        <button id="contBtn">Continue → finalize (C3)</button>
-        <input id="note" placeholder="note (optional)" style="width:200px"/>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <button class="sec" id="backBtn">Back to start (A) with factor</button>
-        <input id="newfactor" type="number" step="0.1" min="0.5" max="2.5" value="${esc(a.factor)}"/>
-      </div>`;
-    document.getElementById('contBtn').onclick=async()=>{await j('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'continue',note:document.getElementById('note').value})});};
-    document.getElementById('backBtn').onclick=async()=>{await j('/api/decide',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'back',factor:parseFloat(document.getElementById('newfactor').value)})});};
-  } else if(s.stage==='stage2'){ ctl.innerHTML=`<div class="muted">Running stage 2 (C3 join)…</div>`; }
-  else if(s.stage==='done'){
-    const f=s.final||{};
-    ctl.innerHTML=`<div style="margin-bottom:10px"><span class="badge" style="background:#27ae60">done</span> ${esc(f.summary||'')}</div>
-      <button class="sec" id="againBtn">Run again</button>`;
-    document.getElementById('againBtn').onclick=async()=>{await j('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({factor:1.0})});};
-  }
-}
-
-const STAGEMSG={idle:'Set a factor and press Start.',stage1:'Stage 1 running — A fans out to B (above) and C1→C2 (below).',
-  awaiting:'Paused at C2 — the flow is held here awaiting your decision. C3 is blocked until you continue.',
-  stage2:'Stage 2 — C3 joins B and C2.',done:'Finished.'};
-
-let last='';
-async function tick(){
-  try{
-    const s=await j('/api/state');
-    document.getElementById('stagemsg').textContent=STAGEMSG[s.stage]||'';
-    const sig=s.stage+JSON.stringify(s.c2_output)+JSON.stringify(s.final);
-    if(sig!==last){renderControls(s);last=sig;}
-    document.querySelector('#hist tbody').innerHTML=(s.history||[]).map(h=>
-      `<tr><td>${h.iteration}</td><td>${esc(h.factor)}</td><td>${esc(h.peak)}</td><td>${esc(h.decision)}</td></tr>`).join('');
-  }catch(e){/* keep polling */}
-}
-fetch('/health').then(r=>r.json()).then(h=>{document.getElementById('orch').textContent='orchestrator: '+h.orchestrator_url;}).catch(()=>{});
-tick(); setInterval(tick,1500);
-</script>
-</body></html>
-"""
+# The page HTML lives next to this file and is loaded from disk.
+INDEX_HTML = (Path(__file__).resolve().parent / "index.html").read_text(encoding="utf-8")

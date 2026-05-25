@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from common.controller import OrchestratorClient, inline
+from pathlib import Path
 
 # The inner pipeline this controller runs on every user action.
 BLUEPRINT = {
@@ -118,85 +119,5 @@ def index():
     return INDEX_HTML
 
 
-INDEX_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AI-EFFECT — UI in the Loop</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #1a1a2e; }
-  h1 { font-size: 1.4rem; }
-  .card { border: 1px solid #ddd; border-radius: 10px; padding: 20px; margin-top: 16px; }
-  label { display: block; margin: 12px 0 4px; font-weight: 600; }
-  select, input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 1rem; }
-  button { margin-top: 18px; padding: 10px 18px; border: 0; border-radius: 6px; background: #3a3aff; color: #fff; font-size: 1rem; cursor: pointer; }
-  button:disabled { opacity: .6; cursor: default; }
-  .result { margin-top: 18px; }
-  .summary { font-size: 1.05rem; }
-  .rec { margin-top: 8px; padding: 10px; background: #f3f3ff; border-radius: 6px; }
-  .metrics { margin-top: 10px; font-family: monospace; color: #444; }
-  .muted { color: #888; font-size: .85rem; }
-</style>
-</head>
-<body>
-  <h1>Demand scenario explorer</h1>
-  <p class="muted">Pick a scenario, run it, read the result, adjust, run again.
-     Each run submits a fresh workflow (processor → summarizer) to the orchestrator.
-     The loop lives in this page, not in the orchestrator.</p>
-
-  <div class="card">
-    <label for="scenario">Scenario</label>
-    <select id="scenario">
-      <option value="baseline">Baseline</option>
-      <option value="cold snap">Cold snap</option>
-      <option value="heat wave">Heat wave</option>
-      <option value="efficiency drive">Efficiency drive</option>
-    </select>
-
-    <label for="factor">Demand scaling factor (0.5 – 2.0)</label>
-    <input id="factor" type="number" min="0.5" max="2.0" step="0.1" value="1.0" />
-
-    <button id="run">Run</button>
-
-    <div class="result" id="result"></div>
-  </div>
-
-<script>
-const btn = document.getElementById('run');
-const out = document.getElementById('result');
-
-btn.addEventListener('click', async () => {
-  btn.disabled = true;
-  out.innerHTML = '<p class="muted">Running…</p>';
-  try {
-    const res = await fetch('run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scenario: document.getElementById('scenario').value,
-        factor: parseFloat(document.getElementById('factor').value),
-      }),
-    });
-    const data = await res.json();
-    if (data.status !== 'completed') {
-      out.innerHTML = '<p class="rec">Run ' + (data.status || 'failed') +
-        (data.error ? (': ' + data.error) : '') + '</p>';
-    } else {
-      const r = data.result || {};
-      out.innerHTML =
-        '<div class="summary">' + (r.summary || '(no summary)') + '</div>' +
-        '<div class="rec">' + (r.recommendation || '') + '</div>' +
-        '<div class="metrics">' + JSON.stringify(r.metrics || {}) + '</div>' +
-        '<div class="muted">workflow ' + data.workflow_id + '</div>';
-    }
-  } catch (e) {
-    out.innerHTML = '<p class="rec">Error: ' + e.message + '</p>';
-  } finally {
-    btn.disabled = false;
-  }
-});
-</script>
-</body>
-</html>
-"""
+# The page HTML lives next to this file and is loaded from disk.
+INDEX_HTML = (Path(__file__).resolve().parent / "index.html").read_text(encoding="utf-8")
