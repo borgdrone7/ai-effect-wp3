@@ -40,6 +40,85 @@ def decode(ref) -> dict:
     return {}
 
 
+# ----- blueprint / dockerinfo builders -----
+# Controllers that build pipelines in code can use these instead of writing the
+# verbose JSON shapes by hand.
+
+def blueprint_node(container, operation, input_message="Request",
+                   output_message="Response", connected_to=(), node_type="MLModel",
+                   image=None, proto_uri=None) -> dict:
+    """Build one blueprint node.
+
+    connected_to: iterable of (container, operation) pairs this node feeds into.
+    image / proto_uri default to sensible values; they do not affect execution
+    (the orchestrator reaches services via dockerinfo, not the image name).
+    """
+    return {
+        "container_name": container,
+        "proto_uri": proto_uri or f"{container}.proto",
+        "image": image or f"{container}:latest",
+        "node_type": node_type,
+        "operation_signature_list": [{
+            "operation_signature": {
+                "operation_name": operation,
+                "input_message_name": input_message,
+                "output_message_name": output_message,
+            },
+            "connected_to": [
+                {"container_name": c, "operation_signature": {"operation_name": o}}
+                for c, o in connected_to
+            ],
+        }],
+    }
+
+
+def make_blueprint(name, nodes, pipeline_id=None, version="2.0") -> dict:
+    """Wrap a list of nodes into a complete pipeline-topology/v2 blueprint."""
+    import uuid
+    from datetime import datetime
+    return {
+        "name": name,
+        "pipeline_id": pipeline_id or uuid.uuid4().hex[:12],
+        "creation_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "type": "pipeline-topology/v2",
+        "version": version,
+        "nodes": nodes,
+    }
+
+
+def make_dockerinfo(services) -> dict:
+    """Build dockerinfo. services: iterable of (container, ip_address, port) tuples
+    or ready-made dicts."""
+    entries = []
+    for s in services:
+        if isinstance(s, dict):
+            entries.append(s)
+        else:
+            container, ip, port = s
+            entries.append({"container_name": container, "ip_address": ip, "port": str(port)})
+    return {"docker_info_list": entries}
+
+
+# ----- mapping orchestrator task state onto a logical graph -----
+# Work on the `tasks` dict returned by OrchestratorClient.workflow(), so a
+# controller can fetch the workflow once and reuse it.
+
+def node_statuses(tasks: dict, node_key_map: dict) -> dict:
+    """Map a workflow's tasks onto logical node keys.
+
+    node_key_map: {logical_key: orchestrator_node_key}.
+    Returns {logical_key: status} ("pending" when a task is absent).
+    """
+    return {logical: (tasks.get(nk) or {}).get("status", "pending")
+            for logical, nk in node_key_map.items()}
+
+
+def node_output(tasks: dict, node_key: str) -> dict:
+    """Decoded inline output of a task by its orchestrator node_key ({} if none)."""
+    refs = (tasks.get(node_key) or {}).get("output_refs") or []
+    return decode(refs[0]) if refs else {}
+
+
 class OrchestratorClient:
     """Thin client over the orchestrator's workflow + solution-view APIs."""
 

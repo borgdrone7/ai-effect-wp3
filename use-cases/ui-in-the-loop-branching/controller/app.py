@@ -33,7 +33,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from common.controller import OrchestratorClient, inline, decode
+from common.controller import (
+    OrchestratorClient, inline, decode,
+    blueprint_node, make_blueprint, make_dockerinfo, node_statuses, node_output,
+)
 from pathlib import Path
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://host.docker.internal:18000").rstrip("/")
@@ -63,38 +66,20 @@ FULL_GRAPH = {
 NODE_KEY = {"a": "a:Root", "b": "b:Headroom", "c1": "c1:Normalize", "c2": "c2:Assess", "c3": "c3:Finalize"}
 
 
-def _img(cn):
-    return f"uitl-branching-{cn}:latest"
+STAGE1_BLUEPRINT = make_blueprint("Branching HITL - Stage 1", [
+    blueprint_node("a", "Root", "RootRequest", "RootResponse",
+                   [("b", "Headroom"), ("c1", "Normalize")], "DataSource"),
+    blueprint_node("b", "Headroom", "HeadroomRequest", "HeadroomResponse", [], "DataSink"),
+    blueprint_node("c1", "Normalize", "NormalizeRequest", "NormalizeResponse",
+                   [("c2", "Assess")], "MLModel"),
+    blueprint_node("c2", "Assess", "AssessRequest", "AssessResponse", [], "DataSink"),
+], pipeline_id="uitl-branching-s1")
 
+STAGE2_BLUEPRINT = make_blueprint("Branching HITL - Stage 2", [
+    blueprint_node("c3", "Finalize", "FinalizeRequest", "FinalizeResponse", [], "DataSink"),
+], pipeline_id="uitl-branching-s2")
 
-def _node(cn, op, inmsg, outmsg, connected, ntype):
-    return {
-        "container_name": cn, "proto_uri": f"{cn}.proto", "image": _img(cn), "node_type": ntype,
-        "operation_signature_list": [{
-            "operation_signature": {"operation_name": op, "input_message_name": inmsg, "output_message_name": outmsg},
-            "connected_to": [{"container_name": t[0], "operation_signature": {"operation_name": t[1]}} for t in connected],
-        }],
-    }
-
-
-STAGE1_BLUEPRINT = {
-    "name": "Branching HITL - Stage 1", "pipeline_id": "uitl-branching-s1",
-    "creation_date": "2026-05-01", "type": "pipeline-topology/v2", "version": "2.0",
-    "nodes": [
-        _node("a", "Root", "RootRequest", "RootResponse", [("b", "Headroom"), ("c1", "Normalize")], "DataSource"),
-        _node("b", "Headroom", "HeadroomRequest", "HeadroomResponse", [], "DataSink"),
-        _node("c1", "Normalize", "NormalizeRequest", "NormalizeResponse", [("c2", "Assess")], "MLModel"),
-        _node("c2", "Assess", "AssessRequest", "AssessResponse", [], "DataSink"),
-    ],
-}
-STAGE2_BLUEPRINT = {
-    "name": "Branching HITL - Stage 2", "pipeline_id": "uitl-branching-s2",
-    "creation_date": "2026-05-01", "type": "pipeline-topology/v2", "version": "2.0",
-    "nodes": [_node("c3", "Finalize", "FinalizeRequest", "FinalizeResponse", [], "DataSink")],
-}
-DOCKERINFO = {"docker_info_list": [
-    {"container_name": cn, "ip_address": cn, "port": "8080"} for cn in ("a", "b", "c1", "c2", "c3")
-]}
+DOCKERINFO = make_dockerinfo([(cn, cn, 8080) for cn in ("a", "b", "c1", "c2", "c3")])
 
 
 # ---- controller state (single-session, in memory) ------------------------
@@ -133,10 +118,6 @@ def _publish_state(statuses, stage, detail=None):
 
 def _submit(blueprint, inputs):
     return _oc.submit(blueprint, DOCKERINFO, inputs)
-
-
-def _wf(workflow_id):
-    return _oc.workflow(workflow_id)
 
 
 class StartReq(BaseModel):
@@ -199,14 +180,13 @@ def _status_map():
 
     if stage in ("stage1", "awaiting"):
         if stage == "stage1":
-            wstatus, tasks = _wf(STATE["stage1_wf"])
-            for k in ("a", "b", "c1", "c2"):
-                base[k] = tasks.get(NODE_KEY[k], {}).get("status", "pending")
+            wstatus, tasks = _oc.workflow(STATE["stage1_wf"])
+            base.update(node_statuses(tasks, {k: NODE_KEY[k] for k in ("a", "b", "c1", "c2")}))
             base["c3"] = "blocked"
             if wstatus == "completed":
                 # capture outputs and move to the pause
-                STATE["b_output"] = _decode((tasks.get(NODE_KEY["b"], {}).get("output_refs") or [None])[0])
-                STATE["c2_output"] = _decode((tasks.get(NODE_KEY["c2"], {}).get("output_refs") or [None])[0])
+                STATE["b_output"] = node_output(tasks, NODE_KEY["b"])
+                STATE["c2_output"] = node_output(tasks, NODE_KEY["c2"])
                 STATE["stage"] = "awaiting"
             elif wstatus == "failed":
                 base = {**base, "_error": "Stage 1 failed"}
@@ -216,10 +196,10 @@ def _status_map():
 
     elif stage == "stage2":
         base.update({"a": "completed", "b": "completed", "c1": "completed", "c2": "completed"})
-        wstatus, tasks = _wf(STATE["stage2_wf"])
-        base["c3"] = tasks.get(NODE_KEY["c3"], {}).get("status", "running")
+        wstatus, tasks = _oc.workflow(STATE["stage2_wf"])
+        base["c3"] = (tasks.get(NODE_KEY["c3"]) or {}).get("status", "running")
         if wstatus == "completed":
-            STATE["final"] = _decode((tasks.get(NODE_KEY["c3"], {}).get("output_refs") or [None])[0])
+            STATE["final"] = node_output(tasks, NODE_KEY["c3"])
             STATE["stage"] = "done"
             base["c3"] = "completed"
 
