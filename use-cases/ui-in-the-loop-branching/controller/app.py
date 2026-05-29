@@ -24,20 +24,17 @@ The UI always shows the full five-node graph; C3 stays visible (blocked) during
 Stage 1, and C2 is shown as "awaiting" so the pause is visible.
 """
 
-import base64
-import json
 import os
-import time
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from common.controller import (
-    OrchestratorClient, inline, decode,
+    OrchestratorClient, inline,
     blueprint_node, make_blueprint, make_dockerinfo, node_statuses, node_output,
 )
-from pathlib import Path
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://host.docker.internal:18000").rstrip("/")
 ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY", "")
@@ -101,10 +98,8 @@ STAGE_MSG = {
 }
 
 
-# Shared orchestrator client + inline helpers (see common/controller.py).
+# Shared orchestrator client (uses ORCHESTRATOR_URL / API key from env).
 _oc = OrchestratorClient(base_url=ORCHESTRATOR_URL, api_key=ORCHESTRATOR_API_KEY)
-_inline = inline
-_decode = decode
 
 
 def _publish_graph():
@@ -135,7 +130,7 @@ def start(req: StartReq):
     STATE.update({"stage": "stage1", "stage2_wf": None, "b_output": None,
                   "c2_output": None, "final": None, "factor": req.factor,
                   "iteration": 1, "history": []})
-    STATE["stage1_wf"] = _submit(STAGE1_BLUEPRINT, [_inline({"factor": req.factor, "kind": "init"})])
+    STATE["stage1_wf"] = _submit(STAGE1_BLUEPRINT, [inline({"factor": req.factor, "kind": "init"})])
     _publish_graph()
     _publish_state({k: "pending" for k in NODE_KEY}, "stage1")
     return {"ok": True}
@@ -147,8 +142,8 @@ def decide(req: DecideReq):
         raise HTTPException(409, "Not waiting for a decision")
 
     if req.action == "continue":
-        inputs = [_inline(STATE["b_output"]), _inline(STATE["c2_output"]),
-                  _inline({"kind": "human", "accept": True, "note": req.note})]
+        inputs = [inline(STATE["b_output"]), inline(STATE["c2_output"]),
+                  inline({"kind": "human", "accept": True, "note": req.note})]
         STATE["history"].append({"iteration": STATE["iteration"],
                                  "peak": STATE["c2_output"].get("peak"),
                                  "factor": STATE["c2_output"].get("factor"), "decision": "continue"})
@@ -167,7 +162,7 @@ def decide(req: DecideReq):
             a_input["factor"] = req.factor
         STATE["iteration"] += 1
         STATE.update({"stage": "stage1", "b_output": None, "c2_output": None})
-        STATE["stage1_wf"] = _submit(STAGE1_BLUEPRINT, [_inline(a_input)])
+        STATE["stage1_wf"] = _submit(STAGE1_BLUEPRINT, [inline(a_input)])
         return {"ok": True}
 
     raise HTTPException(400, "action must be 'continue' or 'back'")
